@@ -24,8 +24,8 @@ Worked through Tutorial.spthy: PKI modelling (Fr, pub/fresh sorts, ltk/pk, persi
 
 
 
-### [DATE]
-* **[TIME] [DURATION]:** [What you did]
+### 25/9/2026
+* **12:00-18:15 6hr15m:** Built src/toy_kex_signed.spthy from scratch: added signing builtins, wrote Alice_send (encrypt session key under Bob's public key, sign the ciphertext with Alice's long-term key) and Bob_recv (decrypt, verify signature via an Eq restriction). Debugged several issues along the way: construct-vs-read on the LHS (!Pk($B, pkB) not !Pk($B, pk(~ltk))), signing the ciphertext not the plaintext key, outputting the pair <ctx, sig> not the raw key, and collapsing double let-in blocks into one. Added agreement, runs, and secrecy lemmas. Agreement was falsified — read the attack trace in the GUI and identified a misdirection attack: the signature authenticated Alice as sender but didn't bind the intended recipient, so an attacker could relay Alice's signed ciphertext to a different Bob. Fixed by including the recipient's public key in the signed payload (sign(<ctx, pkB>, ltkA)) and verifying against it. All three lemmas now verified (agreement 12 steps, runs 8, secrecy 13). Spent a lot of time today just learning slowly how Tamarin works syntactically.
 
 ## Week 2
 

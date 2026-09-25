@@ -1,0 +1,56 @@
+theory toy_kex_signed
+begin
+
+builtins: asymmetric-encryption, signing
+
+rule Register_pk:
+  [ Fr(~ltk) ]
+  --[ Register($A) ]->
+  [ !Ltk($A, ~ltk), !Pk($A, pk(~ltk)), Out(pk(~ltk)) ]
+
+rule Reveal_ltk:
+  [ !Ltk($A, ltk) ]
+  --[ Reveal($A) ]->
+  [ Out(ltk) ]
+
+/* Alice now needs: her own private key (to sign with), and Bob's public key
+   (to encrypt to). She encrypts ~k to Bob as before, then signs that
+   ciphertext with her own key, and sends both out. */
+
+rule Alice_send:
+    let ctx = aenc(~k, pkB)
+      sig = sign(<ctx, pkB>, ltkA)
+  in
+  [ !Ltk($A, ltkA), !Pk($B, pkB), Fr(~k) ]
+  --[ Sent($A, $B, ~k) ]->
+  [ Out(<ctx, sig>) ]
+
+/* Bob now needs: his own private key (to decrypt), and Alice's public key
+   (to check the signature). He should only accept if the signature verifies
+   against the ciphertext and Alice's public key. */
+rule Bob_recv:
+  let k = adec(ctx, ltkB)
+  in
+  [ !Ltk($B, ltkB), !Pk($A, pkA), In(<ctx, sig>) ]
+    --[ Eq(verify(sig, <ctx, pk(ltkB)>, pkA), true), Recv($A, $B, k) ]->
+  [ ]
+
+  
+restriction Eq:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+
+lemma agreement:
+  "All A B k #i. Recv(A, B, k) @ i
+   ==> (Ex #j. Sent(A, B, k) @ j & j < i)
+     | (Ex X #r. Reveal(X) @ r)"
+
+
+lemma runs:
+  exists-trace
+  "Ex A B k #i. Recv(A, B, k) @ i"
+
+lemma secrecy:
+  "All A B k #i. Recv(A, B, k) @ i
+   ==> not(Ex #j. K(k) @ j) | (Ex X #r. Reveal(X) @ r)"
+end

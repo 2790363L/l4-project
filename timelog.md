@@ -29,8 +29,11 @@ Worked through Tutorial.spthy: PKI modelling (Fr, pub/fresh sorts, ltk/pk, persi
 
 ## Week 2
 
-### [DATE]
-* **[TIME] [DURATION]:** [What you did]
+### 28-2/10/2026
+* **N/A:** through the week I dine some planning but was mostly focused on other subject and tried to prepare myself to have a big project push on friday since I have the full day off
+
+### 02/10/2026
+* **08:30-
 
 <!--
 Add a new "## Week N" section as you go. Example of a filled-in entry:

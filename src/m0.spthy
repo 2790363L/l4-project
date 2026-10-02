@@ -4,7 +4,8 @@
  * Scope:  A creates a group (epoch 0), commits an Add of B (epoch 1), and B
  *         joins from the Welcome. No Update, no Remove, no ratchet tree, no
  *         PSKs, no external joins.
- * Status: design only. No rules are written and nothing below has been run.
+ * Status: rules and lemmas written. Results are whatever `make` records in
+ *         results/m0.txt; nothing is claimed here beyond that file.
  *         Section numbers refer to RFC 9420.
  *
  * ---------------------------------------------------------------------------
@@ -29,34 +30,44 @@
  *     epoch is the constant '0' or '1'.
  *     tree_hash = h(tree), where tree is the tuple of leaves and
  *     leaf = <id, hpk(leaf_sk), pk(sig_sk)>.
- *     The transcript chain of 8.2 is kept in full: the confirmation tag means
- *     nothing without it.
+ *     The transcript chain of 8.2 is kept in full, commit signature included:
+ *     the confirmation tag means nothing without it.
  *     Revisit: epoch as a natural number in M1, real tree hash in M2.
  *
- * D4  Trusted Authentication Service (5.3.1). Each identity has one long-term
- *     signature key, bound to it by a persistent fact that only the AS rule
- *     creates. A checks the KeyPackage's leaf against it; B checks the leaf of
- *     the GroupInfo signer against it. AS compromise (16.10) is out of scope.
+ * D4  Trusted Authentication Service (5.3.1). Each identity has exactly one
+ *     long-term signature key, bound to it by a persistent fact that only the
+ *     AS rule creates. A checks the KeyPackage's leaf against it; B checks the
+ *     leaf of the GroupInfo signer against it. AS compromise (16.10) is out
+ *     of scope.
  *
  * ---------------------------------------------------------------------------
  * OTHER SIMPLIFICATIONS
  * ---------------------------------------------------------------------------
  * S1  GroupInfo travels in clear inside the Welcome. The RFC encrypts it under
  *     welcome_key (12.4.3.1), so welcome_secret is unused here and the
- *     adversary sees more than in the RFC. No claims about metadata
- *     confidentiality (16.4). Revisit: M3.
- * S2  The Commit has no membership_tag and no PrivateMessage framing: no
- *     member receives it in M0. Revisit: M1.
+ *     adversary sees more than in the RFC. The HPKE context still binds the
+ *     GroupSecrets to the GroupInfo. No claims about metadata confidentiality
+ *     (16.4). Revisit: M3.
+ * S2  The Commit message is not sent. No member receives it in M0, and the
+ *     adversary already knows everything in it except the commit signature,
+ *     which no M0 rule verifies. Its content and signature still feed the
+ *     transcript hash. Sending it roughly doubled Tamarin's case splits.
+ *     Revisit: M1.
  * S3  One signature per KeyPackage. The inner LeafNode signature (7.2),
  *     lifetime, capabilities and extensions are dropped.
  * S4  GroupInfo.signer is implicit: always the first leaf (the creator).
- * S5  B's KeyPackage state is consumed when B joins, i.e. B deletes the
- *     private init_key. No explicit requirement for this was found in the
- *     RFC; it is an assumption of this model and needs checking.
+ * S5  B deletes the private init_key when it joins: a KeyPackage is consumed
+ *     by Join, and RevInit is only allowed before that Join. No explicit
+ *     requirement for this was found in the RFC; it is an assumption of this
+ *     model and needs checking.
  * S6  A moves to epoch 1 as soon as it commits, without waiting for the
  *     Delivery Service to echo the Commit (permitted by 3.2).
  * S7  Joiner checks skipped: parent hashes (there are no parent nodes),
  *     cipher suite match, group_id uniqueness, lifetime.
+ * S8  A never adds itself: signature keys are unique among members (7.3) and
+ *     each identity has one key (D4).
+ * S9  No epoch-1 state is stored. M0 ends at the Committed and Joined events;
+ *     M1 adds the state that later commits continue from.
  *
  * ---------------------------------------------------------------------------
  * STATE FACTS
@@ -65,17 +76,15 @@
  * !Cred($X, pk(~sig))        The AS binding; pk(~sig) is also public.
  * KeyPkg($B, ~init, ~lk)     Linear. B's private keys behind one published
  *                            KeyPackage. Consumed when B joins (S5).
+ * !InitKey($B, ~init, kp)    Read only by RevInit.
  * Group0($A, ~gid, ~lk, ~es0)
  *                            Linear. A's epoch-0 state. Consumed by the commit.
- * Member($X, gid, GC1, es1)  A's and B's epoch-1 state. Terminal in M0; M1
- *                            continues from it.
  *
  * ---------------------------------------------------------------------------
  * KEY SCHEDULE  (8, 11)
  * ---------------------------------------------------------------------------
  * Epoch 0 (11): ~es0 is fresh; it is not derived from a joiner secret.
- *   tree0    = leafA
- *   GC0      = <~gid, '0', h(tree0), 'empty'>
+ *   GC0      = <~gid, '0', h(leafA), 'empty'>
  *   init0    = expand(~es0, 'init', 'empty')
  *   ck0      = expand(~es0, 'confirm', 'empty')
  *   tag0     = mac(ck0, 'empty')
@@ -100,10 +109,9 @@
  *    A accepts a kp from the network if the signature verifies under the
  *    key in its leaf and !Cred holds for the identity and key in that leaf.
  *
- * 2. Commit, sent by A (12.4.1, 6.1):
+ * 2. Commit, computed by A but not sent (S2) (12.4.1, 6.1):
  *      content = <~gid, '0', $A, 'commit', <'add', kp>>          no path (D1)
  *      csig    = sign(<'FramedContentTBS', content, GC0>, ~sigA)
- *      msg     = <content, csig, tag1>
  *
  * 3. Welcome, sent by A (12.4.3.1):
  *      gi    = <GC1, tag1>
@@ -123,35 +131,39 @@
  * ---------------------------------------------------------------------------
  * Dolev-Yao on every message above, plus two reveals:
  *   RevSig(X)        X's long-term signature key.
- *   RevInit(B, pk)   the private init_key of a KeyPackage B has not yet used.
+ *   RevInit(B, kp)   the private init_key of a KeyPackage B has not yet used.
  * No reveal of group state (epoch or init secrets). That arrives with FS and
  * PCS in M1.
  *
  * ---------------------------------------------------------------------------
- * LEMMAS  (in English; none stated formally or run yet)
+ * LEMMAS
  * ---------------------------------------------------------------------------
- * L1  Executability (exists-trace). Some A creates a group and commits an Add
- *     of B, B joins, and both end in epoch 1 with the same GroupContext and
- *     the same epoch secret, with no reveal anywhere in the trace.
+ * exec                   The honest run exists, with no reveal.
+ * join_once              A KeyPackage is used for at most one join.
+ * secrecy_committer      A's epoch secret stays secret unless B's signature
+ *                        key leaked before the commit or the init_key of the
+ *                        KeyPackage A used leaked.
+ * agreement_state        If B joins with signer A and A's signature key did
+ *                        not leak first, A committed that group, GroupContext
+ *                        and epoch secret (for some KeyPackage).
+ * secrecy_joiner         B's epoch secret stays secret unless A's or B's
+ *                        signature key leaked before the join, or B's
+ *                        init_key leaked.
+ * agreement_keypackage   As agreement_state, and A added exactly B's
+ *                        KeyPackage; needs B's signature key intact as well.
  *
- * L2a Secrecy, committer's view. Whenever A commits an Add of a KeyPackage
- *     attributed to B and reaches epoch secret es1, the adversary never learns
- *     es1, unless B's signature key was revealed before the commit (the
- *     KeyPackage may be forged) or that KeyPackage's init_key was revealed.
- *
- * L2b Secrecy, joiner's view. Whenever B joins with signer A and reaches es1,
- *     the adversary never learns es1, unless A's signature key was revealed
- *     before the join (the Welcome may be forged) or B's init_key for that
- *     KeyPackage was revealed.
- *
- * L3  Joiner agreement. Whenever B joins gid with signer A, GroupContext GC1
- *     and secret es1, and A's signature key was not revealed before that, A
- *     earlier committed in gid an Add of exactly B's KeyPackage and reached
- *     the same GC1 and es1. B joins at most once per KeyPackage.
- *
- * L4  Control, expected to be FALSIFIED. L3 with the reveal condition removed.
- *     The trace to look for: the adversary reveals A's signature key and
- *     forges a Welcome. If L4 verifies, the reveal rule or L3 is broken.
+ * Attack lemmas are exists-trace: "verified" means the trace was found.
+ * attack_joiner_secrecy_needs_own_key
+ *                        B joins, the adversary knows the epoch secret, A's
+ *                        key never leaks, no init_key leaks. The adversary
+ *                        uses B's signature key to forge a KeyPackage for B
+ *                        with its own init_key, A adds it, and the adversary
+ *                        re-wraps the joiner secret to B's real init_key.
+ * attack_keypackage_agreement_needs_own_key
+ *                        The same forgery: B joins with a KeyPackage A never
+ *                        committed.
+ * control_forged_welcome With A's signature key leaked, B joins a group
+ *                        nobody committed. Confirms the reveal rules bite.
  */
 
 theory M0
@@ -161,5 +173,210 @@ builtins: hashing, signing
 
 functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
 equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
+
+restriction Eq:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction Neq:
+  "All x #i. Neq(x, x) @ i ==> F"
+
+/* ------------------------------------------------------------------------
+ * Setup
+ * ---------------------------------------------------------------------- */
+
+/* Authentication Service (D4): binds one long-term signature key to X. */
+rule Register_sig:
+  [ Fr(~sig) ]
+  --[ Register($X, pk(~sig)) ]->
+  [ !Ltk($X, ~sig), !Cred($X, pk(~sig)), Out(pk(~sig)) ]
+
+restriction one_key_per_identity:
+  "All X pk1 pk2 #i #j.
+     Register(X, pk1) @ i & Register(X, pk2) @ j ==> #i = #j"
+
+/* B publishes a KeyPackage (10) and keeps the private keys behind it. */
+rule Publish_KeyPackage:
+  let leaf = <$B, hpk(~lk), pk(~sig)>
+      kp   = <hpk(~init), leaf>
+  in
+  [ !Ltk($B, ~sig), Fr(~init), Fr(~lk) ]
+  --[ PublishedKP($B, kp) ]->
+  [ KeyPkg($B, ~init, ~lk), !InitKey($B, ~init, kp)
+  , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ]
+
+/* ------------------------------------------------------------------------
+ * Protocol
+ * ---------------------------------------------------------------------- */
+
+/* A creates a one-member group at epoch 0 (11). Nothing is sent. */
+rule Create_Group:
+  [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
+  --[ Created($A, ~gid) ]->
+  [ Group0($A, ~gid, ~lk, ~es0) ]
+
+/* A commits an Add of B with no path (D1) and sends the Welcome (12.4.1,
+   12.4.3.1). A takes the KeyPackage from the network and checks its
+   signature against the AS binding for the identity in its leaf. */
+rule Commit_Add:
+  let leafA    = <$A, hpk(~lk), pk(~sigA)>
+      leafB    = <$B, lkB, pkB>
+      kp       = <ik, leafB>
+      GC0      = <~gid, '0', h(leafA), 'empty'>
+      init0    = expand(~es0, 'init', 'empty')
+      ck0      = expand(~es0, 'confirm', 'empty')
+      tag0     = mac(ck0, 'empty')
+      interim0 = h(<'empty', tag0>)
+      content  = <~gid, '0', $A, 'commit', <'add', kp>>
+      csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA)
+      tree1    = <leafA, leafB>
+      cth1     = h(<interim0, content, csig>)
+      GC1      = <~gid, '1', h(tree1), cth1>
+      js       = expand(extract(init0, 'zero'), 'joiner', GC1)
+      es1      = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1      = expand(es1, 'confirm', 'empty')
+      tag1     = mac(ck1, cth1)
+      gi       = <GC1, tag1>
+      gisig    = sign(<'GroupInfoTBS', gi>, ~sigA)
+      info     = <gi, gisig, tree1>
+      egs      = hseal(ik, <'Welcome', info>, js)
+  in
+  [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA)
+  , !Cred($B, pkB), In(<kp, kpsig>) ]
+  --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true)
+    , Neq($A, $B)                                                  /* S8 */
+    , Committed($A, ~gid, $B, kp, GC1, es1) ]->
+  [ Out(<h(<'KeyPackageRef', kp>), egs, info>) ]
+
+/* B joins from a Welcome (12.4.3.1). Opening egs is done by pattern
+   matching on hseal under B's own init key. */
+rule Join:
+  let leafB = <$B, hpk(~lk), pk(~sigB)>
+      kp    = <hpk(~init), leafB>
+      leafA = <$A, lkA, pkA>
+      tree1 = <leafA, leafB>
+      GC1   = <gid, '1', h(tree1), cth1>
+      gi    = <GC1, tag1>
+      info  = <gi, gisig, tree1>
+      egs   = hseal(hpk(~init), <'Welcome', info>, js)
+      es1   = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1   = expand(es1, 'confirm', 'empty')
+  in
+  [ KeyPkg($B, ~init, ~lk), !Ltk($B, ~sigB)
+  , !Cred($A, pkA), In(<h(<'KeyPackageRef', kp>), egs, info>) ]
+  --[ Eq(verify(gisig, <'GroupInfoTBS', gi>, pkA), true)
+    , Eq(tag1, mac(ck1, cth1))
+    , Joined($B, gid, $A, kp, GC1, es1) ]->
+  [ ]
+
+/* ------------------------------------------------------------------------
+ * Adversary
+ * ---------------------------------------------------------------------- */
+
+rule RevSig:
+  [ !Ltk($X, ~sig) ]
+  --[ RevSig($X) ]->
+  [ Out(~sig) ]
+
+/* Reveals the init key behind a KeyPackage. Only possible before B joins
+   with it: B deletes the key on joining (S5). */
+rule RevInit:
+  [ !InitKey($B, ~init, kp) ]
+  --[ RevInit($B, kp) ]->
+  [ Out(~init) ]
+
+restriction init_key_deleted_on_join:
+  "All B gid A kp GC es #i #r.
+     Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
+
+/* ------------------------------------------------------------------------
+ * Lemmas
+ * ---------------------------------------------------------------------- */
+
+lemma exec: exists-trace
+  "Ex A B gid kp GC es #i #j.
+       Committed(A, gid, B, kp, GC, es) @ i
+     & Joined(B, gid, A, kp, GC, es) @ j
+     & not (Ex X #r. RevSig(X) @ r)
+     & not (Ex X k #r. RevInit(X, k) @ r)
+     /* one of each step, to keep the search small */
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma join_once:
+  "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #i #j.
+       Joined(B, gid1, A1, kp, GC1, es1) @ i
+     & Joined(B, gid2, A2, kp, GC2, es2) @ j
+     ==> #i = #j"
+
+lemma secrecy_committer [reuse]:
+  "All A gid B kp GC es #i.
+     Committed(A, gid, B, kp, GC, es) @ i
+     ==> not (Ex #k. K(es) @ k)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevInit(B, kp) @ r)"
+
+lemma agreement_state [reuse]:
+  "All B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     ==> (Ex B2 kp2 #j. Committed(A, gid, B2, kp2, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)"
+
+lemma secrecy_joiner:
+  "All B gid A kp GC es #i.
+     Joined(B, gid, A, kp, GC, es) @ i
+     ==> not (Ex #k. K(es) @ k)
+       | (Ex #r. RevSig(A) @ r & r < i)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevInit(B, kp) @ r)"
+
+lemma agreement_keypackage:
+  "All B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     ==> (Ex #j. Committed(A, gid, B, kp, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)
+       | (Ex #r. RevSig(B) @ r & r < i)"
+
+/* ------------------------------------------------------------------------
+ * Attack lemmas (exists-trace). "verified" means Tamarin found the trace.
+ * ---------------------------------------------------------------------- */
+
+lemma attack_joiner_secrecy_needs_own_key: exists-trace
+  "Ex B gid A kp GC es #i #k.
+       Joined(B, gid, A, kp, GC, es) @ i & K(es) @ k
+     & not (Ex #r. RevSig(A) @ r)
+     & not (Ex X k2 #r. RevInit(X, k2) @ r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma attack_keypackage_agreement_needs_own_key: exists-trace
+  "Ex B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     & not (Ex #j. Committed(A, gid, B, kp, GC, es) @ j)
+     & not (Ex #r. RevSig(A) @ r)
+     & not (Ex X k2 #r. RevInit(X, k2) @ r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma control_forged_welcome: exists-trace
+  "Ex B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     & not (Ex A2 g2 B2 k2 c2 e2 #j. Committed(A2, g2, B2, k2, c2, e2) @ j)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)"
 
 end

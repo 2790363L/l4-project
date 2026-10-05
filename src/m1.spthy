@@ -1,0 +1,532 @@
+/*
+ * M1, slice 1: two members, one Update commit (RFC 9420)
+ *
+ * Scope:  everything in M0, then B commits an update of its own leaf with a
+ *         path and A processes it (epoch 2). Members now hold state and the
+ *         adversary can reveal it. Decisions D1-D4 and simplifications S1-S9
+ *         of m0.spthy carry over unchanged.
+ *         Not yet: a third member, Remove, an Update proposal committed by
+ *         someone else, A as committer, repeated commits.
+ * Status: results are whatever `make` records in results/m1.txt.
+ *         Section numbers refer to RFC 9420.
+ *
+ * ---------------------------------------------------------------------------
+ * DECISIONS NEW IN M1
+ * ---------------------------------------------------------------------------
+ * E1  State per member per epoch (9.2): init_secret, encryption_secret and
+ *     the member's leaf private key. epoch_secret, joiner_secret and
+ *     commit_secret are not kept; 9.2 requires them deleted once consumed.
+ *     encryption_secret stands for all message keys of the epoch and is the
+ *     "group key" in the lemmas (action GroupKey).
+ * E2  A member deletes an epoch's state when it moves to the next epoch
+ *     (restriction state_deleted_on_leaving), so RevState is only possible
+ *     while the member is in that epoch. RevState does not reveal the
+ *     signature key (that is RevSig). A's epoch-0 state cannot be revealed.
+ * E3  Only B (leaf 1) commits and only A (leaf 0) processes. The mirrored
+ *     pair of rules is not written, so results about "the committer" and
+ *     "the other member" hold for this one assignment.
+ * E4  The update is an empty Commit with a path (12.4). B replaces its leaf
+ *     key and sends one fresh path secret, sealed to A's leaf key with the
+ *     provisional GroupContext as context (7.6). With two leaves this is the
+ *     whole UpdatePath, except that the root key pair derived from the path
+ *     secret is not kept: with two members nobody encrypts to it.
+ *     commit_secret = expand(path_secret, 'path', 'empty').
+ * E5  The Commit is sent as content, signature and confirmation tag, with no
+ *     membership_tag (6.2) and no PrivateMessage encryption. The adversary
+ *     is stronger than in the RFC: forging a commit needs the sender's
+ *     signature key and the confirmation tag, but no membership key.
+ * E6  The transcript chain continues (8.2):
+ *     interim1 = h(<cth1, tag1>),  cth2 = h(<interim1, content, csig>).
+ * E7  Epochs are the constants '0', '1', '2'. No rule can repeat, so no
+ *     induction is needed. Revisit when commits can repeat.
+ * E8  B moves to epoch 2 as soon as it commits (as S6 in M0).
+ *
+ * ---------------------------------------------------------------------------
+ * STATE FACTS NEW IN M1
+ * ---------------------------------------------------------------------------
+ * StA1($A, gid, GC1, interim1, init1, ~lk, leafA, leafB)
+ * StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA)
+ *                          Linear. What each member needs to leave epoch 1.
+ * !Secrets($X, gid, ep, init, enc, lk)
+ *                          Read only by RevState (E1, E2).
+ *
+ * ---------------------------------------------------------------------------
+ * KEY SCHEDULE, epoch 2  (8)
+ * ---------------------------------------------------------------------------
+ *   init1 = expand(es1, 'init', 'empty')
+ *   enc1  = expand(es1, 'encryption', 'empty')
+ *   tree2 = <leafA, leafB2>          leafB2 = <$B, hpk(~lk2), pk(~sigB)>
+ *   prov  = <gid, '2', h(tree2), cth1>              provisional GroupContext
+ *   ct    = hseal(lkA, <'UpdatePathNode', prov>, ~ps)
+ *   content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>
+ *   csig  = sign(<'FramedContentTBS', content, GC1>, ~sigB)
+ *   cth2  = h(<interim1, content, csig>)
+ *   GC2   = <gid, '2', h(tree2), cth2>
+ *   cs    = expand(~ps, 'path', 'empty')                      commit_secret
+ *   js2   = expand(extract(init1, cs), 'joiner', GC2)
+ *   es2   = expand(extract(js2, 'zero'), 'epoch', GC2)
+ *   tag2  = mac(expand(es2, 'confirm', 'empty'), cth2)
+ *   Commit on the wire: <content, csig, tag2>
+ *   A accepts if csig verifies under the key in B's current leaf, the new
+ *   leaf key differs from the old one (12.4.2), ct opens under A's leaf key,
+ *   and the tag recomputed from its own init1 equals tag2.
+ *
+ * ---------------------------------------------------------------------------
+ * ADVERSARY
+ * ---------------------------------------------------------------------------
+ * As M0 (Dolev-Yao, RevSig, RevInit), plus:
+ *   RevState(X, gid, ep)   init_secret, encryption_secret and leaf private
+ *                          key that X holds for that epoch of that group.
+ *
+ * ---------------------------------------------------------------------------
+ * LEMMAS NEW IN M1
+ * ---------------------------------------------------------------------------
+ * exec_update        The honest run reaches epoch 2 with both members
+ *                    agreeing, with no reveal.
+ * agreement_update   If A processes a commit from B, B made that commit with
+ *                    the same GroupContext and epoch secret, unless A's or
+ *                    B's signature key leaked first.
+ * fs_epoch1          Forward secrecy. The epoch-1 group key stays secret even
+ *                    if any state is revealed in epoch 2. Excuses: a state
+ *                    reveal in epoch 1, or any RevSig or RevInit.
+ * pcs_epoch2         Post-compromise security. After B's commit the epoch-2
+ *                    group key is secret even if B's own epoch-1 state had
+ *                    been revealed. Excuses: a state reveal in epoch 2, a
+ *                    reveal of the other member's epoch-1 state, or any
+ *                    RevSig or RevInit.
+ * control_state_reveal
+ *                    exists-trace. One epoch-1 state reveal is enough to
+ *                    learn the epoch-1 group key.
+ * attack_no_pcs_when_peer_compromised
+ *                    exists-trace. If A's epoch-1 state was revealed and B
+ *                    then commits, the adversary knows both secret inputs of
+ *                    epoch 2's key schedule (init_secret of epoch 1 and the
+ *                    path secret): only the committer heals. The lemma is
+ *                    stated on the inputs because that is cheap to prove.
+ *                    The same attack on the group key itself is at the end
+ *                    of the file, commented out: Tamarin finds the trace but
+ *                    needs about 10 minutes and 6 GB.
+ *
+ * Tool note: the rules are large enough that Tamarin's derivation checks
+ * time out at the default 5 seconds. Run with --derivcheck-timeout=120.
+ */
+
+theory M1
+begin
+
+builtins: hashing, signing
+
+functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
+equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
+
+restriction Eq:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction Neq:
+  "All x #i. Neq(x, x) @ i ==> F"
+
+/* ------------------------------------------------------------------------
+ * Setup
+ * ---------------------------------------------------------------------- */
+
+/* Authentication Service (D4): binds one long-term signature key to X. */
+rule Register_sig:
+  [ Fr(~sig) ]
+  --[ Register($X, pk(~sig)) ]->
+  [ !Ltk($X, ~sig), !Cred($X, pk(~sig)), Out(pk(~sig)) ]
+
+restriction one_key_per_identity:
+  "All X pk1 pk2 #i #j.
+     Register(X, pk1) @ i & Register(X, pk2) @ j ==> #i = #j"
+
+/* B publishes a KeyPackage (10) and keeps the private keys behind it. */
+rule Publish_KeyPackage:
+  let leaf = <$B, hpk(~lk), pk(~sig)>
+      kp   = <hpk(~init), leaf>
+  in
+  [ !Ltk($B, ~sig), Fr(~init), Fr(~lk) ]
+  --[ PublishedKP($B, kp) ]->
+  [ KeyPkg($B, ~init, ~lk), !InitKey($B, ~init, kp)
+  , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ]
+
+/* ------------------------------------------------------------------------
+ * Protocol
+ * ---------------------------------------------------------------------- */
+
+/* A creates a one-member group at epoch 0 (11). Nothing is sent. */
+rule Create_Group:
+  [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
+  --[ Created($A, ~gid) ]->
+  [ Group0($A, ~gid, ~lk, ~es0) ]
+
+/* A commits an Add of B with no path (D1) and sends the Welcome (12.4.1,
+   12.4.3.1). A takes the KeyPackage from the network and checks its
+   signature against the AS binding for the identity in its leaf. */
+rule Commit_Add:
+  let leafA    = <$A, hpk(~lk), pk(~sigA)>
+      leafB    = <$B, lkB, pkB>
+      kp       = <ik, leafB>
+      GC0      = <~gid, '0', h(leafA), 'empty'>
+      init0    = expand(~es0, 'init', 'empty')
+      ck0      = expand(~es0, 'confirm', 'empty')
+      tag0     = mac(ck0, 'empty')
+      interim0 = h(<'empty', tag0>)
+      content  = <~gid, '0', $A, 'commit', <'add', kp>>
+      csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA)
+      tree1    = <leafA, leafB>
+      cth1     = h(<interim0, content, csig>)
+      GC1      = <~gid, '1', h(tree1), cth1>
+      js       = expand(extract(init0, 'zero'), 'joiner', GC1)
+      es1      = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1      = expand(es1, 'confirm', 'empty')
+      tag1     = mac(ck1, cth1)
+      gi       = <GC1, tag1>
+      gisig    = sign(<'GroupInfoTBS', gi>, ~sigA)
+      info     = <gi, gisig, tree1>
+      egs      = hseal(ik, <'Welcome', info>, js)
+      interim1 = h(<cth1, tag1>)
+      init1    = expand(es1, 'init', 'empty')
+      enc1     = expand(es1, 'encryption', 'empty')
+  in
+  [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA)
+  , !Cred($B, pkB), In(<kp, kpsig>) ]
+  --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true)
+    , Neq($A, $B)                                                  /* S8 */
+    , Committed($A, ~gid, $B, kp, GC1, es1)
+    , GroupKey($A, ~gid, '1', enc1) ]->
+  [ StA1($A, ~gid, GC1, interim1, init1, ~lk, leafA, leafB)
+  , !Secrets($A, ~gid, '1', init1, enc1, ~lk)
+  , Out(<h(<'KeyPackageRef', kp>), egs, info>) ]
+
+/* B joins from a Welcome (12.4.3.1). Opening egs is done by pattern
+   matching on hseal under B's own init key. */
+rule Join:
+  let leafB = <$B, hpk(~lk), pk(~sigB)>
+      kp    = <hpk(~init), leafB>
+      leafA = <$A, lkA, pkA>
+      tree1 = <leafA, leafB>
+      GC1   = <gid, '1', h(tree1), cth1>
+      gi    = <GC1, tag1>
+      info  = <gi, gisig, tree1>
+      egs   = hseal(hpk(~init), <'Welcome', info>, js)
+      es1   = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1   = expand(es1, 'confirm', 'empty')
+      interim1 = h(<cth1, tag1>)
+      init1 = expand(es1, 'init', 'empty')
+      enc1  = expand(es1, 'encryption', 'empty')
+  in
+  [ KeyPkg($B, ~init, ~lk), !Ltk($B, ~sigB)
+  , !Cred($A, pkA), In(<h(<'KeyPackageRef', kp>), egs, info>) ]
+  --[ Eq(verify(gisig, <'GroupInfoTBS', gi>, pkA), true)
+    , Eq(tag1, mac(ck1, cth1))
+    , Joined($B, gid, $A, kp, GC1, es1)
+    , GroupKey($B, gid, '1', enc1) ]->
+  [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA)
+  , !Secrets($B, gid, '1', init1, enc1, ~lk) ]
+
+
+/* B (leaf 1) commits an update of its own leaf with a path (12.4, 7.4-7.6).
+   In a two-leaf tree the path is one secret, sealed to A's leaf key. */
+rule Commit_Update:
+  let leafB   = <$B, hpk(~lk), pk(~sigB)>
+      leafA   = <$A, lkA, pkA>
+      GC1     = <gid, '1', th1, cth1>
+      leafB2  = <$B, hpk(~lk2), pk(~sigB)>
+      tree2   = <leafA, leafB2>
+      prov    = <gid, '2', h(tree2), cth1>
+      ct      = hseal(lkA, <'UpdatePathNode', prov>, ~ps)
+      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>
+      csig    = sign(<'FramedContentTBS', content, GC1>, ~sigB)
+      cth2    = h(<interim1, content, csig>)
+      GC2     = <gid, '2', h(tree2), cth2>
+      cs      = expand(~ps, 'path', 'empty')
+      js2     = expand(extract(init1, cs), 'joiner', GC2)
+      es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
+      ck2     = expand(es2, 'confirm', 'empty')
+      tag2    = mac(ck2, cth2)
+      init2   = expand(es2, 'init', 'empty')
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA)
+  , !Ltk($B, ~sigB), Fr(~lk2), Fr(~ps) ]
+  --[ Left($B, gid, '1')
+    , Updated($B, gid, GC2, es2)
+    , SecretInputs($B, gid, init1, ~ps)
+    , GroupKey($B, gid, '2', enc2) ]->
+  [ !Secrets($B, gid, '2', init2, enc2, ~lk2)
+  , Out(<content, csig, tag2>) ]
+
+/* A (leaf 0) processes B's commit (12.4.2). */
+rule Process_Update:
+  let leafA   = <$A, hpk(~lk), pkA>
+      leafB   = <$B, lkB, pkB>
+      GC1     = <gid, '1', th1, cth1>
+      leafB2  = <$B, lkB2, pkB>
+      tree2   = <leafA, leafB2>
+      prov    = <gid, '2', h(tree2), cth1>
+      ct      = hseal(hpk(~lk), <'UpdatePathNode', prov>, ps)
+      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>
+      cth2    = h(<interim1, content, csig>)
+      GC2     = <gid, '2', h(tree2), cth2>
+      cs      = expand(ps, 'path', 'empty')
+      js2     = expand(extract(init1, cs), 'joiner', GC2)
+      es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
+      ck2     = expand(es2, 'confirm', 'empty')
+      init2   = expand(es2, 'init', 'empty')
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StA1($A, gid, GC1, interim1, init1, ~lk, leafA, leafB)
+  , In(<content, csig, tag2>) ]
+  --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkB), true)
+    , Eq(tag2, mac(ck2, cth2))
+    , Neq(lkB, lkB2)
+    , Left($A, gid, '1')
+    , Processed($A, gid, $B, GC2, es2)
+    , GroupKey($A, gid, '2', enc2) ]->
+  [ !Secrets($A, gid, '2', init2, enc2, ~lk) ]
+
+/* ------------------------------------------------------------------------
+ * Adversary
+ * ---------------------------------------------------------------------- */
+
+rule RevSig:
+  [ !Ltk($X, ~sig) ]
+  --[ RevSig($X) ]->
+  [ Out(~sig) ]
+
+/* Reveals the init key behind a KeyPackage. Only possible before B joins
+   with it: B deletes the key on joining (S5). */
+rule RevInit:
+  [ !InitKey($B, ~init, kp) ]
+  --[ RevInit($B, kp) ]->
+  [ Out(~init) ]
+
+/* Reveals what member X holds for one epoch of one group (9.2): the init
+   secret, the message-protection secret and X's leaf private key. Only
+   possible while X is in that epoch. */
+rule RevState:
+  [ !Secrets($X, gid, ep, init, enc, lk) ]
+  --[ RevState($X, gid, ep) ]->
+  [ Out(<init, enc, lk>) ]
+
+restriction state_deleted_on_leaving:
+  "All X gid ep #r #t.
+     RevState(X, gid, ep) @ r & Left(X, gid, ep) @ t ==> r < t"
+
+restriction init_key_deleted_on_join:
+  "All B gid A kp GC es #i #r.
+     Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
+
+/* ------------------------------------------------------------------------
+ * M0 lemmas, unchanged, as regression tests
+ * ---------------------------------------------------------------------- */
+
+lemma exec: exists-trace
+  "Ex A B gid kp GC es #i #j.
+       Committed(A, gid, B, kp, GC, es) @ i
+     & Joined(B, gid, A, kp, GC, es) @ j
+     & not (Ex X #r. RevSig(X) @ r)
+     & not (Ex X k #r. RevInit(X, k) @ r)
+     /* one of each step, to keep the search small */
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma join_once:
+  "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #i #j.
+       Joined(B, gid1, A1, kp, GC1, es1) @ i
+     & Joined(B, gid2, A2, kp, GC2, es2) @ j
+     ==> #i = #j"
+
+lemma secrecy_committer [reuse]:
+  "All A gid B kp GC es #i.
+     Committed(A, gid, B, kp, GC, es) @ i
+     ==> not (Ex #k. K(es) @ k)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevInit(B, kp) @ r)"
+
+lemma agreement_state [reuse]:
+  "All B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     ==> (Ex B2 kp2 #j. Committed(A, gid, B2, kp2, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)"
+
+lemma secrecy_joiner:
+  "All B gid A kp GC es #i.
+     Joined(B, gid, A, kp, GC, es) @ i
+     ==> not (Ex #k. K(es) @ k)
+       | (Ex #r. RevSig(A) @ r & r < i)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevInit(B, kp) @ r)"
+
+lemma agreement_keypackage:
+  "All B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     ==> (Ex #j. Committed(A, gid, B, kp, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)
+       | (Ex #r. RevSig(B) @ r & r < i)"
+
+/* ------------------------------------------------------------------------
+ * Attack lemmas (exists-trace). "verified" means Tamarin found the trace.
+ * ---------------------------------------------------------------------- */
+
+lemma attack_joiner_secrecy_needs_own_key: exists-trace
+  "Ex B gid A kp GC es #i #k.
+       Joined(B, gid, A, kp, GC, es) @ i & K(es) @ k
+     & not (Ex #r. RevSig(A) @ r)
+     & not (Ex X k2 #r. RevInit(X, k2) @ r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma attack_keypackage_agreement_needs_own_key: exists-trace
+  "Ex B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     & not (Ex #j. Committed(A, gid, B, kp, GC, es) @ j)
+     & not (Ex #r. RevSig(A) @ r)
+     & not (Ex X k2 #r. RevInit(X, k2) @ r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+
+lemma control_forged_welcome: exists-trace
+  "Ex B gid A kp GC es #i.
+       Joined(B, gid, A, kp, GC, es) @ i
+     & not (Ex A2 g2 B2 k2 c2 e2 #j. Committed(A2, g2, B2, k2, c2, e2) @ j)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)"
+
+/* ------------------------------------------------------------------------
+ * M1 lemmas
+ * ---------------------------------------------------------------------- */
+
+lemma exec_update: exists-trace
+  "Ex A B gid kp GC1 es1 GC2 es2 #i #j #u #p.
+       Committed(A, gid, B, kp, GC1, es1) @ i
+     & Joined(B, gid, A, kp, GC1, es1) @ j
+     & Updated(B, gid, GC2, es2) @ u
+     & Processed(A, gid, B, GC2, es2) @ p
+     & not (Ex X #r. RevSig(X) @ r)
+     & not (Ex X k #r. RevInit(X, k) @ r)
+     & not (Ex X g e #r. RevState(X, g, e) @ r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
+            Updated(X1, g1, c1, e1) @ a
+          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+
+lemma agreement_update [reuse]:
+  "All A gid B GC es #i.
+       Processed(A, gid, B, GC, es) @ i
+     ==> (Ex #j. Updated(B, gid, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevSig(A) @ r & r < i)"
+
+lemma fs_epoch1:
+  "All X gid k #i.
+     GroupKey(X, gid, '1', k) @ i
+     ==> not (Ex #j. K(k) @ j)
+       | (Ex Y #r. RevState(Y, gid, '1') @ r)
+       | (Ex Y #r. RevSig(Y) @ r)
+       | (Ex Y kp #r. RevInit(Y, kp) @ r)"
+
+lemma pcs_epoch2:
+  "All X gid k B GC es #i #u.
+       GroupKey(X, gid, '2', k) @ i & Updated(B, gid, GC, es) @ u
+     ==> not (Ex #j. K(k) @ j)
+       | (Ex Y #r. RevState(Y, gid, '2') @ r)
+       | (Ex Y #r. RevState(Y, gid, '1') @ r & not (Y = B))
+       | (Ex Y #r. RevSig(Y) @ r)
+       | (Ex Y kp #r. RevInit(Y, kp) @ r)"
+
+lemma control_state_reveal: exists-trace
+  "Ex X Y gid k #i #j #r.
+       GroupKey(X, gid, '1', k) @ i & K(k) @ j
+     & RevState(Y, gid, '1') @ r
+     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+     & not (Ex Z #s. RevSig(Z) @ s)
+     & not (Ex Z k2 #s. RevInit(Z, k2) @ s)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
+            Updated(X1, g1, c1, e1) @ a
+          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+
+/* No healing when the other member was the compromised one. A's epoch-1
+   state is revealed, B then commits, and the adversary knows both secret
+   inputs of epoch 2's key schedule: init_secret of epoch 1 and the path
+   secret. Stated on the inputs because that derivation is short. */
+lemma attack_no_pcs_when_peer_compromised: exists-trace
+  "Ex A B gid GC es i1 ps #u #p #r #x #y.
+       Updated(B, gid, GC, es) @ u
+     & SecretInputs(B, gid, i1, ps) @ u
+     & Processed(A, gid, B, GC, es) @ p
+     & RevState(A, gid, '1') @ r & r < u
+     & K(i1) @ x & K(ps) @ y
+     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+     & not (Ex X #s. RevSig(X) @ s)
+     & not (Ex X k2 #s. RevInit(X, k2) @ s)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
+            Updated(X1, g1, c1, e1) @ a
+          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+
+/* The same attack stated on the epoch-2 group key itself. Tamarin 1.12.0
+   finds the trace (39 steps) but took about 10 minutes and 6 GB on a 2-core
+   machine, so it is left out of the default run. Unlike the lemma above it
+   does not require the reveal to come before B's commit, only before A
+   leaves epoch 1. Remove the comment markers to run it.
+
+  lemma attack_no_pcs_group_key: exists-trace
+    "Ex A B gid GC es k #u #p #i #j #r.
+         Updated(B, gid, GC, es) @ u
+       & Processed(A, gid, B, GC, es) @ p
+       & GroupKey(B, gid, '2', k) @ i & K(k) @ j
+       & RevState(A, gid, '1') @ r
+       & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+            RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+       & not (Ex X #s. RevSig(X) @ s)
+       & not (Ex X k2 #s. RevInit(X, k2) @ s)
+       & (All X1 X2 g1 g2 #a #b.
+            Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+       & (All X1 X2 k1 k2 #a #b.
+            PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+       & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+              Committed(A1, g1, B1, k1, c1, e1) @ a
+            & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
+       & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
+              Updated(X1, g1, c1, e1) @ a
+            & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+*/
+
+end

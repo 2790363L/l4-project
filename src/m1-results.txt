@@ -1,0 +1,7 @@
+  exec (exists-trace): verified (21 steps)
+  join_once (all-traces): verified (12 steps)
+  secrecy_committer (all-traces): verified (15 steps)
+  agreement_state (all-traces): verified (8 steps)
+  secrecy_joiner (all-traces): verified (14 steps)
+  agreement_keypackage (all-traces): verified (23 steps)
+  attack_joiner_secrecy_needs_own_key (exists-trace): verified (29 steps)

@@ -1,0 +1,9 @@
+exec (exists-trace): verified
+join_once (all-traces): verified
+secrecy_committer (all-traces): verified
+agreement_state (all-traces): verified
+secrecy_joiner (all-traces): verified
+agreement_keypackage (all-traces): verified
+attack_joiner_secrecy_needs_own_key (exists-trace): verified
+attack_keypackage_agreement_needs_own_key (exists-trace): verified
+control_forged_welcome (exists-trace): verified

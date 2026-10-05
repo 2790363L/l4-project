@@ -1,0 +1,3 @@
+agreement (all-traces): verified
+runs (exists-trace): verified
+secrecy (all-traces): verified

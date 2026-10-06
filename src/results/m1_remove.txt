@@ -1,0 +1,10 @@
+exec_join_both (exists-trace): verified
+exec_remove (exists-trace): verified
+secrecy_epoch1 (all-traces): verified
+agreement_join (all-traces): verified
+agreement_remove (all-traces): verified
+path_secret_secrecy (all-traces): verified
+removal_security (all-traces): verified
+control_removed_member_had_key (exists-trace): verified
+attack_remaining_member_compromised (exists-trace): verified
+attack_keypackage_reused_in_another_group (exists-trace): verified

@@ -1,0 +1,548 @@
+/*
+ * M1, slice 2: three members, one Remove commit (RFC 9420)
+ *
+ * Scope:  A creates a group and adds B and C in one commit (epoch 1). A then
+ *         commits a Remove of C with a path, and B processes it (epoch 2).
+ *         The question this file answers: does the removed member, or an
+ *         adversary who holds everything the removed member knew, learn the
+ *         group key of the epoch after its removal?
+ * Why a separate file from m1.spthy: every epoch nests the previous epoch's
+ *         transcript and secrets, so terms grow about threefold per epoch.
+ *         Chaining an Add and a Remove after slice 1's Update would put this
+ *         at epoch 4. Here, as in slice 1, the commit under study starts
+ *         from epoch 1.
+ * Carried over unchanged: D1-D4 and S1-S9 of m0.spthy, and E1, E2, E5, E6,
+ *         E7 of m1.spthy (state contents, deletion on leaving an epoch, no
+ *         membership tag, transcript chain, constant epochs).
+ * Status: all ten lemmas terminate (see the tool notes at the end of this
+ *         comment).
+ *         Section numbers refer to RFC 9420.
+ *
+ * ---------------------------------------------------------------------------
+ * DECISIONS NEW IN THIS FILE
+ * ---------------------------------------------------------------------------
+ * R1  A adds B and C in a single commit carrying two Add proposals (12.4),
+ *     with no path (D1). One Welcome carries the joiner secret sealed once
+ *     to each new member's init_key, and one GroupInfo (12.4.3.1).
+ * R2  The tree is the tuple <leafA, leafB, leafC>. There is one Join rule per
+ *     position (leaf 1 and leaf 2). A joiner checks the AS binding of every
+ *     leaf in the tree, not only the signer's (12.4.3.1, 7.3), and that the
+ *     three identities are distinct (7.3).
+ * R3  The Remove is a commit by A with one Remove proposal for leaf 2 and a
+ *     path (12.1.3, 12.4). A replaces its own leaf key and sends one fresh
+ *     path secret, sealed to B's leaf key only. C gets nothing. The tree
+ *     after the commit is <leafA2, leafB>.
+ * R4  Fixed roles: only A commits, only C is removed, only B processes.
+ *     Results about "the removed member" and "a remaining member" hold for
+ *     this one assignment.
+ * R5  C never processes its own removal and never deletes its epoch-1 state,
+ *     so RevState(C, gid, '1') is possible at any time. That is the
+ *     strongest adversary for the removal lemma. (12.4.2 says a removed
+ *     client SHOULD delete its state promptly.)
+ *
+ * ---------------------------------------------------------------------------
+ * STATE FACTS
+ * ---------------------------------------------------------------------------
+ * As m0.spthy, plus:
+ * StA1($A, gid, GC1, interim1, init1, ~lk, leafA, leafB, leafC)
+ * StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA, leafC)
+ *                          Linear. What A and B need to leave epoch 1.
+ * !Secrets($X, gid, ep, init, enc, lk)
+ *                          Read only by RevState. C has one for epoch 1.
+ *
+ * ---------------------------------------------------------------------------
+ * MESSAGES NEW IN THIS FILE
+ * ---------------------------------------------------------------------------
+ * Welcome (R1):
+ *   tree1 = <leafA, leafB, leafC>
+ *   content = <~gid, '0', $A, 'commit', <<'add', kpB>, <'add', kpC>>>
+ *   info  = <gi, gisig, tree1>                 gi, gisig as in m0.spthy
+ *   msg   = < <h(<'KeyPackageRef', kpB>), hseal(ikB, <'Welcome', info>, js)>
+ *           , <h(<'KeyPackageRef', kpC>), hseal(ikC, <'Welcome', info>, js)>
+ *           , info >
+ *   Each joiner reads its own entry and info.
+ *
+ * Remove commit (R3):
+ *   leafA2 = <$A, hpk(~lk2), pk(~sigA)>
+ *   tree2  = <leafA2, leafB>
+ *   prov   = <gid, '2', h(tree2), cth1>
+ *   ct     = hseal(lkB, <'UpdatePathNode', prov>, ~ps)
+ *   content = <gid, '1', $A, 'commit', <'remove', 'leaf2'>,
+ *              <'path', leafA2, ct>>
+ *   csig, cth2, GC2, js2, es2, tag2 as in m1.spthy
+ *   msg    = <content, csig, tag2>
+ *
+ * ---------------------------------------------------------------------------
+ * LEMMAS
+ * ---------------------------------------------------------------------------
+ * exec_join_both       The honest run reaches epoch 1 with B and C both
+ *                      joined and agreeing with A, no reveal.
+ * exec_remove          The honest run reaches epoch 2: B joins, A removes C,
+ *                      B processes, A and B agree, no reveal.
+ * secrecy_epoch1       The epoch-1 secret A derived stays secret unless a
+ *                      new member's signature key leaked before the commit
+ *                      or a new member's init_key leaked. Helper.
+ * agreement_join       A joiner's group state is one A committed, unless A's
+ *                      signature key leaked first. Helper.
+ * agreement_remove     If B processes the Remove, A made that commit with
+ *                      the same GroupContext and epoch secret, unless A's
+ *                      signature key leaked first. Helper.
+ * path_secret_secrecy  The path secret of A's Remove commit stays secret
+ *                      unless B's signature key leaked before A's Add commit
+ *                      (a forged KeyPackage, as in m0.spthy), or B's state
+ *                      leaked in a group that B joined with the KeyPackage A
+ *                      used. That group need not be this one. Helper.
+ * removal_security     The epoch-2 group key that A derives when it removes
+ *                      C stays secret. The adversary may hold everything of
+ *                      C's (its epoch-1 state at any time, its signature key,
+ *                      its init_key), A's epoch-1 state, A's signature key
+ *                      and B's init_key. Excuses: A's epoch-2 state, and the
+ *                      two excuses of path_secret_secrecy.
+ *                      The lemma is about A's own key. B's key is the same
+ *                      term whenever agreement_remove applies: both rules
+ *                      compute the group key from the epoch secret alone.
+ *                      An earlier form quantified over any party holding an
+ *                      epoch-2 key under the same group id, with excuses
+ *                      limited to this group. It did not finish in seven
+ *                      minutes and was dropped.
+ * control_removed_member_had_key
+ *                      exists-trace. C's epoch-1 state does give the
+ *                      epoch-1 group key, so the removal is what protects
+ *                      epoch 2.
+ * attack_remaining_member_compromised
+ *                      exists-trace. If B's epoch-1 state leaked before the
+ *                      Remove, the adversary knows both secret inputs of
+ *                      epoch 2's key schedule. Removing C does not heal a
+ *                      compromise of B.
+ * attack_keypackage_reused_in_another_group
+ *                      exists-trace. Two creators add B with the same
+ *                      KeyPackage. B joins the other group, and its state
+ *                      there leaks. Together with C's state the adversary
+ *                      knows both secret inputs of epoch 2 here, although no
+ *                      state of A or B in this group leaked and no signature
+ *                      key or init_key leaked. This is why the second excuse
+ *                      of path_secret_secrecy names any group. The model
+ *                      lets a KeyPackage be used any number of times; RFC
+ *                      9420 says KeyPackages SHOULD NOT be reused, except a
+ *                      "last resort" KeyPackage (10, 16.8).
+ *
+ * ---------------------------------------------------------------------------
+ * TOOL NOTES
+ * ---------------------------------------------------------------------------
+ * Flags: --derivcheck-timeout=300 --open-chains=30. Without the second flag
+ *     Tamarin stops its source precomputation early ("Too many chain
+ *     constraints").
+ * Trace search: the configuration line below selects plain depth-first
+ *     search. Tamarin's default deepens a bound in steps 4, 8, 16, 32, 64
+ *     and exhausts the whole tree at each bound. The traces in this file
+ *     are 27 to 72 steps deep, and with the default neither exec lemma
+ *     finished in four and a half minutes.
+ * Tactic: removal_security uses the tactic `removal`, which solves goals
+ *     about the path secret before anything else, and hides secrecy_epoch1.
+ *     Without both it did not finish in nine minutes.
+ */
+
+theory M1Remove
+
+/* See TOOL NOTES. Options on the command line override this line. */
+configuration: "--stop-on-trace=SEQDFS"
+
+begin
+
+builtins: hashing, signing
+
+functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
+equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
+
+/* For removal_security. The proof ends where the adversary needs the path
+   secret, so goals that mention it are solved first: the fresh name itself,
+   then any term built from the commit secret expand(~ps, 'path', 'empty'). */
+tactic: removal
+presort: s
+prio:
+    regex "!KU\( ~ps"
+prio:
+    regex "!KU\(.*'path', +'empty'"
+
+restriction Eq:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction Neq:
+  "All x #i. Neq(x, x) @ i ==> F"
+
+/* ------------------------------------------------------------------------
+ * Setup (as m0.spthy)
+ * ---------------------------------------------------------------------- */
+
+rule Register_sig:
+  [ Fr(~sig) ]
+  --[ Register($X, pk(~sig)) ]->
+  [ !Ltk($X, ~sig), !Cred($X, pk(~sig)), Out(pk(~sig)) ]
+
+restriction one_key_per_identity:
+  "All X pk1 pk2 #i #j.
+     Register(X, pk1) @ i & Register(X, pk2) @ j ==> #i = #j"
+
+rule Publish_KeyPackage:
+  let leaf = <$B, hpk(~lk), pk(~sig)>
+      kp   = <hpk(~init), leaf>
+  in
+  [ !Ltk($B, ~sig), Fr(~init), Fr(~lk) ]
+  --[ PublishedKP($B, kp) ]->
+  [ KeyPkg($B, ~init, ~lk), !InitKey($B, ~init, kp)
+  , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ]
+
+/* ------------------------------------------------------------------------
+ * Epoch 0 to 1: create, add two members, join
+ * ---------------------------------------------------------------------- */
+
+rule Create_Group:
+  [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
+  --[ Created($A, ~gid) ]->
+  [ Group0($A, ~gid, ~lk, ~es0) ]
+
+/* A commits two Add proposals with no path and sends one Welcome (R1). */
+rule Commit_Add:
+  let leafA    = <$A, hpk(~lk), pk(~sigA)>
+      leafB    = <$B, lkB, pkB>
+      leafC    = <$C, lkC, pkC>
+      kpB      = <ikB, leafB>
+      kpC      = <ikC, leafC>
+      GC0      = <~gid, '0', h(leafA), 'empty'>
+      init0    = expand(~es0, 'init', 'empty')
+      ck0      = expand(~es0, 'confirm', 'empty')
+      tag0     = mac(ck0, 'empty')
+      interim0 = h(<'empty', tag0>)
+      content  = <~gid, '0', $A, 'commit', <<'add', kpB>, <'add', kpC>>>
+      csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA)
+      tree1    = <leafA, leafB, leafC>
+      cth1     = h(<interim0, content, csig>)
+      GC1      = <~gid, '1', h(tree1), cth1>
+      js       = expand(extract(init0, 'zero'), 'joiner', GC1)
+      es1      = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1      = expand(es1, 'confirm', 'empty')
+      tag1     = mac(ck1, cth1)
+      gi       = <GC1, tag1>
+      gisig    = sign(<'GroupInfoTBS', gi>, ~sigA)
+      info     = <gi, gisig, tree1>
+      egsB     = hseal(ikB, <'Welcome', info>, js)
+      egsC     = hseal(ikC, <'Welcome', info>, js)
+      interim1 = h(<cth1, tag1>)
+      init1    = expand(es1, 'init', 'empty')
+      enc1     = expand(es1, 'encryption', 'empty')
+  in
+  [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA)
+  , !Cred($B, pkB), In(<kpB, kpsigB>)
+  , !Cred($C, pkC), In(<kpC, kpsigC>) ]
+  --[ Eq(verify(kpsigB, <'KeyPackageTBS', kpB>, pkB), true)
+    , Eq(verify(kpsigC, <'KeyPackageTBS', kpC>, pkC), true)
+    , Neq($A, $B), Neq($A, $C), Neq($B, $C)                        /* 7.3 */
+    , Committed($A, ~gid, $B, kpB, $C, kpC, GC1, es1)
+    , GroupKey($A, ~gid, '1', enc1) ]->
+  [ StA1($A, ~gid, GC1, interim1, init1, ~lk, leafA, leafB, leafC)
+  , !Secrets($A, ~gid, '1', init1, enc1, ~lk)
+  , Out(< <h(<'KeyPackageRef', kpB>), egsB>
+        , <h(<'KeyPackageRef', kpC>), egsC>
+        , info >) ]
+
+/* The joiner at leaf 1 (R2). */
+rule Join_Leaf1:
+  let leafB = <$B, hpk(~lk), pk(~sigB)>
+      kp    = <hpk(~init), leafB>
+      leafA = <$A, lkA, pkA>
+      leafC = <$C, lkC, pkC>
+      tree1 = <leafA, leafB, leafC>
+      GC1   = <gid, '1', h(tree1), cth1>
+      gi    = <GC1, tag1>
+      info  = <gi, gisig, tree1>
+      egs   = hseal(hpk(~init), <'Welcome', info>, js)
+      es1   = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1   = expand(es1, 'confirm', 'empty')
+      interim1 = h(<cth1, tag1>)
+      init1 = expand(es1, 'init', 'empty')
+      enc1  = expand(es1, 'encryption', 'empty')
+  in
+  [ KeyPkg($B, ~init, ~lk), !Ltk($B, ~sigB)
+  , !Cred($A, pkA), !Cred($C, pkC)
+  , In(<h(<'KeyPackageRef', kp>), egs, info>) ]
+  --[ Eq(verify(gisig, <'GroupInfoTBS', gi>, pkA), true)
+    , Eq(tag1, mac(ck1, cth1))
+    , Neq($A, $B), Neq($A, $C), Neq($B, $C)
+    , Joined($B, gid, $A, kp, GC1, es1)
+    , GroupKey($B, gid, '1', enc1) ]->
+  [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA, leafC)
+  , !Secrets($B, gid, '1', init1, enc1, ~lk) ]
+
+/* The joiner at leaf 2 (R2). It keeps no state fact: it never commits or
+   processes in this file (R4, R5). */
+rule Join_Leaf2:
+  let leafC = <$C, hpk(~lk), pk(~sigC)>
+      kp    = <hpk(~init), leafC>
+      leafA = <$A, lkA, pkA>
+      leafB = <$B, lkB, pkB>
+      tree1 = <leafA, leafB, leafC>
+      GC1   = <gid, '1', h(tree1), cth1>
+      gi    = <GC1, tag1>
+      info  = <gi, gisig, tree1>
+      egs   = hseal(hpk(~init), <'Welcome', info>, js)
+      es1   = expand(extract(js, 'zero'), 'epoch', GC1)
+      ck1   = expand(es1, 'confirm', 'empty')
+      init1 = expand(es1, 'init', 'empty')
+      enc1  = expand(es1, 'encryption', 'empty')
+  in
+  [ KeyPkg($C, ~init, ~lk), !Ltk($C, ~sigC)
+  , !Cred($A, pkA), !Cred($B, pkB)
+  , In(<h(<'KeyPackageRef', kp>), egs, info>) ]
+  --[ Eq(verify(gisig, <'GroupInfoTBS', gi>, pkA), true)
+    , Eq(tag1, mac(ck1, cth1))
+    , Neq($A, $B), Neq($A, $C), Neq($B, $C)
+    , Joined($C, gid, $A, kp, GC1, es1)
+    , GroupKey($C, gid, '1', enc1) ]->
+  [ !Secrets($C, gid, '1', init1, enc1, ~lk) ]
+
+/* ------------------------------------------------------------------------
+ * Epoch 1 to 2: A removes C, B processes
+ * ---------------------------------------------------------------------- */
+
+/* A commits a Remove of leaf 2 with a path (R3). */
+rule Commit_Remove:
+  let leafA   = <$A, hpk(~lk), pk(~sigA)>
+      leafB   = <$B, lkB, pkB>
+      leafC   = <$C, lkC, pkC>
+      GC1     = <gid, '1', th1, cth1>
+      leafA2  = <$A, hpk(~lk2), pk(~sigA)>
+      tree2   = <leafA2, leafB>
+      prov    = <gid, '2', h(tree2), cth1>
+      ct      = hseal(lkB, <'UpdatePathNode', prov>, ~ps)
+      content = <gid, '1', $A, 'commit', <'remove', 'leaf2'>,
+                 <'path', leafA2, ct>>
+      csig    = sign(<'FramedContentTBS', content, GC1>, ~sigA)
+      cth2    = h(<interim1, content, csig>)
+      GC2     = <gid, '2', h(tree2), cth2>
+      cs      = expand(~ps, 'path', 'empty')
+      js2     = expand(extract(init1, cs), 'joiner', GC2)
+      es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
+      ck2     = expand(es2, 'confirm', 'empty')
+      tag2    = mac(ck2, cth2)
+      init2   = expand(es2, 'init', 'empty')
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StA1($A, gid, GC1, interim1, init1, ~lk, leafA, leafB, leafC)
+  , !Ltk($A, ~sigA), Fr(~lk2), Fr(~ps) ]
+  --[ Left($A, gid, '1')
+    , Removed($A, gid, $C, GC2, es2)
+    , SecretInputs($A, gid, init1, ~ps)
+    , GroupKey($A, gid, '2', enc2) ]->
+  [ !Secrets($A, gid, '2', init2, enc2, ~lk2)
+  , Out(<content, csig, tag2>) ]
+
+/* B (leaf 1) processes A's Remove commit (12.4.2). */
+rule Process_Remove:
+  let leafB   = <$B, hpk(~lk), pkB>
+      leafA   = <$A, lkA, pkA>
+      leafC   = <$C, lkC, pkC>
+      GC1     = <gid, '1', th1, cth1>
+      leafA2  = <$A, lkA2, pkA>
+      tree2   = <leafA2, leafB>
+      prov    = <gid, '2', h(tree2), cth1>
+      ct      = hseal(hpk(~lk), <'UpdatePathNode', prov>, ps)
+      content = <gid, '1', $A, 'commit', <'remove', 'leaf2'>,
+                 <'path', leafA2, ct>>
+      cth2    = h(<interim1, content, csig>)
+      GC2     = <gid, '2', h(tree2), cth2>
+      cs      = expand(ps, 'path', 'empty')
+      js2     = expand(extract(init1, cs), 'joiner', GC2)
+      es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
+      ck2     = expand(es2, 'confirm', 'empty')
+      init2   = expand(es2, 'init', 'empty')
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA, leafC)
+  , In(<content, csig, tag2>) ]
+  --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkA), true)
+    , Eq(tag2, mac(ck2, cth2))
+    , Neq(lkA, lkA2)
+    , Left($B, gid, '1')
+    , Processed($B, gid, $A, $C, GC2, es2)
+    , GroupKey($B, gid, '2', enc2) ]->
+  [ !Secrets($B, gid, '2', init2, enc2, ~lk) ]
+
+/* ------------------------------------------------------------------------
+ * Adversary (as m1.spthy)
+ * ---------------------------------------------------------------------- */
+
+rule RevSig:
+  [ !Ltk($X, ~sig) ]
+  --[ RevSig($X) ]->
+  [ Out(~sig) ]
+
+rule RevInit:
+  [ !InitKey($B, ~init, kp) ]
+  --[ RevInit($B, kp) ]->
+  [ Out(~init) ]
+
+rule RevState:
+  [ !Secrets($X, gid, ep, init, enc, lk) ]
+  --[ RevState($X, gid, ep) ]->
+  [ Out(<init, enc, lk>) ]
+
+restriction state_deleted_on_leaving:
+  "All X gid ep #r #t.
+     RevState(X, gid, ep) @ r & Left(X, gid, ep) @ t ==> r < t"
+
+restriction init_key_deleted_on_join:
+  "All B gid A kp GC es #i #r.
+     Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
+
+/* ------------------------------------------------------------------------
+ * Lemmas
+ * ---------------------------------------------------------------------- */
+
+/* The honest run is checked in two parts, to keep each trace short. */
+
+lemma exec_join_both: exists-trace
+  "Ex A B C gid kpB kpC GC1 es1 #i #jb #jc.
+       Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
+     & Joined(B, gid, A, kpB, GC1, es1) @ jb
+     & Joined(C, gid, A, kpC, GC1, es1) @ jc
+     & not (Ex X #r. RevSig(X) @ r)
+     & not (Ex X k #r. RevInit(X, k) @ r)
+     & not (Ex X g e #r. RevState(X, g, e) @ r)
+     /* one of each step, to keep the search small */
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X k1 k2 #a #b.
+          PublishedKP(X, k1) @ a & PublishedKP(X, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 C1 C2 k1 k2 k3 k4 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)"
+
+lemma exec_remove: exists-trace
+  "Ex A B C gid kpB kpC GC1 es1 GC2 es2 #i #jb #u #p.
+       Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
+     & Joined(B, gid, A, kpB, GC1, es1) @ jb
+     & Removed(A, gid, C, GC2, es2) @ u
+     & Processed(B, gid, A, C, GC2, es2) @ p
+     & not (Ex X #r. RevSig(X) @ r)
+     & not (Ex X k #r. RevInit(X, k) @ r)
+     & not (Ex X g e #r. RevState(X, g, e) @ r)
+     /* one of each step, to keep the search small */
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X k1 k2 #a #b.
+          PublishedKP(X, k1) @ a & PublishedKP(X, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 C1 C2 k1 k2 k3 k4 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 Y1 Y2 c1 c2 e1 e2 #a #b.
+            Removed(X1, g1, Y1, c1, e1) @ a
+          & Removed(X2, g2, Y2, c2, e2) @ b ==> #a = #b)"
+
+lemma secrecy_epoch1 [reuse]:
+  "All A gid B kpB C kpC GC es #i.
+     Committed(A, gid, B, kpB, C, kpC, GC, es) @ i
+     ==> not (Ex #k. K(es) @ k)
+       | (Ex #r. RevSig(B) @ r & r < i)
+       | (Ex #r. RevSig(C) @ r & r < i)
+       | (Ex #r. RevInit(B, kpB) @ r)
+       | (Ex #r. RevInit(C, kpC) @ r)"
+
+lemma agreement_join [reuse]:
+  "All X gid A kp GC es #i.
+       Joined(X, gid, A, kp, GC, es) @ i
+     ==> (Ex B kpB C kpC #j.
+            Committed(A, gid, B, kpB, C, kpC, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)"
+
+lemma agreement_remove [reuse]:
+  "All B gid A C GC es #i.
+       Processed(B, gid, A, C, GC, es) @ i
+     ==> (Ex #j. Removed(A, gid, C, GC, es) @ j & j < i)
+       | (Ex #r. RevSig(A) @ r & r < i)"
+
+lemma path_secret_secrecy [reuse]:
+  "All A gid B kpB C kpC GC1 es1 i1 ps #i #u.
+       Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
+     & SecretInputs(A, gid, i1, ps) @ u
+     ==> not (Ex #j. KU(ps) @ j)
+       | (Ex g A2 GCj esj e #j #r.
+            Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
+       | (Ex #r. RevSig(B) @ r & r < i)"
+
+lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
+  "All A gid B kpB C kpC GC1 es1 GC es k #i #u.
+       Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
+     & Removed(A, gid, C, GC, es) @ u
+     & GroupKey(A, gid, '2', k) @ u
+     ==> not (Ex #j. K(k) @ j)
+       | (Ex #r. RevState(A, gid, '2') @ r)
+       | (Ex g A2 GCj esj e #j #r.
+            Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
+       | (Ex #r. RevSig(B) @ r & r < i)"
+
+lemma control_removed_member_had_key: exists-trace
+  "Ex X A C gid GC es k #i #j #r #u.
+       GroupKey(X, gid, '1', k) @ i & K(k) @ j
+     & Removed(A, gid, C, GC, es) @ u
+     & RevState(C, gid, '1') @ r
+     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+     & not (Ex Z #s. RevSig(Z) @ s)
+     & not (Ex Z k2 #s. RevInit(Z, k2) @ s)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All Z k1 k2 #a #b.
+          PublishedKP(Z, k1) @ a & PublishedKP(Z, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 C1 C2 k1 k2 k3 k4 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)"
+
+lemma attack_remaining_member_compromised: exists-trace
+  "Ex A B C gid GC es i1 ps #u #p #r #x #y.
+       Removed(A, gid, C, GC, es) @ u
+     & SecretInputs(A, gid, i1, ps) @ u
+     & Processed(B, gid, A, C, GC, es) @ p
+     & RevState(B, gid, '1') @ r & r < u
+     & K(i1) @ x & K(ps) @ y
+     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+     & not (Ex Z #s. RevSig(Z) @ s)
+     & not (Ex Z k2 #s. RevInit(Z, k2) @ s)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All Z k1 k2 #a #b.
+          PublishedKP(Z, k1) @ a & PublishedKP(Z, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 C1 C2 k1 k2 k3 k4 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 Y1 Y2 c1 c2 e1 e2 #a #b.
+            Removed(X1, g1, Y1, c1, e1) @ a
+          & Removed(X2, g2, Y2, c2, e2) @ b ==> #a = #b)"
+
+lemma attack_keypackage_reused_in_another_group: exists-trace
+  "Ex A B C gid kpB kpC GC1 es1 A2 g2 C2 kpC2 GCb esb i1 ps
+      #i #i2 #j #jc #u #r #rc #x #y.
+       Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
+     & Committed(A2, g2, B, kpB, C2, kpC2, GCb, esb) @ i2
+     & not (g2 = gid)
+     & Joined(B, g2, A2, kpB, GCb, esb) @ j
+     & Joined(C, gid, A, kpC, GC1, es1) @ jc
+     & SecretInputs(A, gid, i1, ps) @ u
+     & RevState(B, g2, '1') @ r
+     & RevState(C, gid, '1') @ rc
+     & K(i1) @ x & K(ps) @ y
+     & (All Y g e #a. RevState(Y, g, e) @ a ==> (#a = #r) | (#a = #rc))
+     & not (Ex Z #s. RevSig(Z) @ s)
+     & not (Ex Z k2 #s. RevInit(Z, k2) @ s)
+     /* two groups, one of each other step, to keep the search small */
+     & (All X g #a. Created(X, g) @ a ==> (g = gid) | (g = g2))
+     & (All Z k1 k2 #a #b.
+          PublishedKP(Z, k1) @ a & PublishedKP(Z, k2) @ b ==> #a = #b)
+     & (All A1 g1 B1 k1 C1 k3 c1 e1 #a.
+          Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
+          ==> (#a = #i) | (#a = #i2))
+     & (All X1 X2 g1 g3 Y1 Y2 c1 c2 e1 e2 #a #b.
+            Removed(X1, g1, Y1, c1, e1) @ a
+          & Removed(X2, g3, Y2, c2, e2) @ b ==> #a = #b)"
+
+end

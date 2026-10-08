@@ -5,13 +5,6 @@
 * 2790363L
 * Supervisor: Shahid Raza
 
-## Instructions
-
-* Log actual time spent, not planned time.
-* Be specific enough that a stranger reading this could tell what you did (e.g. "installed
-  Tamarin, worked through examples 1-3 in the manual" not "worked on project").
-* Include reading, meetings, admin/email, and dead ends — not just coding/modelling time.
-* Round to the nearest 15 minutes.
 
 ## Week 1
 

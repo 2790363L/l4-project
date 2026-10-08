@@ -29,18 +29,13 @@ Worked through Tutorial.spthy: PKI modelling (Fr, pub/fresh sorts, ltk/pk, persi
 
 ## Week 2
 
-### [DATE]
-* **[TIME] [DURATION]:** [What you did]
+### 2/10/2026
+* **[TIME] [DURATION]:** Started on M0, the first stage of the MLS Tamarin model, ahead of the planned 19 Oct start, to front-load modelling while proof runs are still short.
 
-<!--
-Add a new "## Week N" section as you go. Example of a filled-in entry:
+## Week 3
 
-## Week 1
+### 6/10/2026
+* **[TIME] [DURATION]:** Continued the M0/M1 Tamarin modelling.
 
-### Mon 22 Sept 2026
-* **15:00-15:15, 0.25 hrs:** First supervisor meeting with Shahid Raza (Teams).
-* **19:00-19:30, 0.5 hrs:** Wrote up meeting notes, drafted follow-up email.
-
-### Tue 23 Sept 2026
-* **10:00-12:00, 2 hrs:** Read Basin et al. CCS'18 5G authentication paper (sections 1-4).
--->
+### 7/10/2026
+* **[TIME] [DURATION]:** Meeting with Simon Bouget. Advised to drop post-compromise security from scope and focus on forward secrecy only, and to slow down and build the model from the bottom up rather than pushing ahead on the full thing.

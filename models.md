@@ -1,6 +1,6 @@
 # Tamarin models of MLS (RFC 9420): M0 and M1
 
-Design notes for `m0.spthy` and `m1.spthy`. Section numbers refer to RFC 9420.
+Section numbers refer to RFC 9420.
 
 ---
 

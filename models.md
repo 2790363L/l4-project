@@ -179,7 +179,7 @@ As M0 (Dolev-Yao, RevSig, RevInit), plus new `RevState(X, gid, ep)`: the init_se
 | `exec_update` | Can the run reach epoch 2 with both members agreeing, with no reveal. |
 | `agreement_update` | If A processes a commit from B, B made that commit with the same GroupContext and epoch secret, unless A's or B's signature key leaked first. |
 | `fs_epoch1` | Forward secrecy. The epoch-1 group key stays secret even if any state is revealed in epoch 2. Excuses: a state reveal in epoch 1, or any RevSig or RevInit. |
-| `pcs_epoch2` | Post-compromise security. After B's commit the epoch-2 group key is secret even if B's own epoch-1 state had been revealed. Excuses: a state reveal in epoch 2, a reveal of the other member's epoch-1 state, or any RevSig or RevInit. |
+| `pcs_epoch2` | Post-compromise security. After B's commit the epoch-2 group key is secret even if B's own epoch-1 state had been revealed. Ex clauses: a state reveal in epoch 2, a reveal of the other member's epoch-1 state, or any RevSig or RevInit. |
 | `control_state_reveal` | exists-trace. One epoch-1 state reveal is enough to learn the epoch-1 group key. |
 
 + The m0 lemmas

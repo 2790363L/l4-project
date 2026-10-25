@@ -11,15 +11,10 @@
  *         Chaining an Add and a Remove after slice 1's Update would put this
  *         at epoch 4. Here, as in slice 1, the commit under study starts
  *         from epoch 1.
- * Carried over unchanged: D1-D4 and S1-S9 of m0.spthy, and E1, E2, E5, E6,
- *         E7 of m1.spthy (state contents, deletion on leaving an epoch, no
- *         membership tag, transcript chain, constant epochs).
- * Status: all ten lemmas terminate (see the tool notes at the end of this
- *         comment).
  *         Section numbers refer to RFC 9420.
  *
  * ---------------------------------------------------------------------------
- * DECISIONS NEW IN THIS FILE
+ * NEW IN THIS FILE
  * ---------------------------------------------------------------------------
  * R1  A adds B and C in a single commit carrying two Add proposals (12.4),
  *     with no path (D1). One Welcome carries the joiner secret sealed once
@@ -75,7 +70,7 @@
  * ---------------------------------------------------------------------------
  * LEMMAS
  * ---------------------------------------------------------------------------
- * exec_join_both       The honest run reaches epoch 1 with B and C both
+ * exec_join_both       honest run reaches epoch 1 with B and C both
  *                      joined and agreeing with A, no reveal.
  * exec_remove          The honest run reaches epoch 2: B joins, A removes C,
  *                      B processes, A and B agree, no reveal.
@@ -127,16 +122,9 @@
  *                      "last resort" KeyPackage (10, 16.8).
  *
  * ---------------------------------------------------------------------------
- * TOOL NOTES
+ * NOTES
  * ---------------------------------------------------------------------------
- * Flags: --derivcheck-timeout=300 --open-chains=30. Without the second flag
- *     Tamarin stops its source precomputation early ("Too many chain
- *     constraints").
- * Trace search: the configuration line below selects plain depth-first
- *     search. Tamarin's default deepens a bound in steps 4, 8, 16, 32, 64
- *     and exhausts the whole tree at each bound. The traces in this file
- *     are 27 to 72 steps deep, and with the default neither exec lemma
- *     finished in four and a half minutes.
+ * Flags: --derivcheck-timeout=300 --open-chains=30. 
  * Tactic: removal_security uses the tactic `removal`, which solves goals
  *     about the path secret before anything else, and hides secrecy_epoch1.
  *     Without both it did not finish in nine minutes.
@@ -144,19 +132,17 @@
 
 theory M1Remove
 
-/* See TOOL NOTES. Options on the command line override this line. */
 configuration: "--stop-on-trace=SEQDFS"
 
 begin
 
 builtins: hashing, signing
-
 functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
 equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
 
-/* For removal_security. The proof ends where the adversary needs the path
+/* For removal_security. Proof ends where the adversary needs the path
    secret, so goals that mention it are solved first: the fresh name itself,
-   then any term built from the commit secret expand(~ps, 'path', 'empty'). */
+   then any term built from the commit secret expand(~ps, 'path', 'empty') */
 tactic: removal
 presort: s
 prio:
@@ -170,9 +156,7 @@ restriction Eq:
 restriction Neq:
   "All x #i. Neq(x, x) @ i ==> F"
 
-/* ------------------------------------------------------------------------
- * Setup (as m0.spthy)
- * ---------------------------------------------------------------------- */
+// Setup
 
 rule Register_sig:
   [ Fr(~sig) ]
@@ -192,16 +176,14 @@ rule Publish_KeyPackage:
   [ KeyPkg($B, ~init, ~lk), !InitKey($B, ~init, kp)
   , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ]
 
-/* ------------------------------------------------------------------------
- * Epoch 0 to 1: create, add two members, join
- * ---------------------------------------------------------------------- */
+// Epoch 0 to 1: create, add two members, join
 
 rule Create_Group:
   [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
   --[ Created($A, ~gid) ]->
   [ Group0($A, ~gid, ~lk, ~es0) ]
 
-/* A commits two Add proposals with no path and sends one Welcome (R1). */
+// A commits two Add proposals with no path and sends one Welcome 
 rule Commit_Add:
   let leafA    = <$A, hpk(~lk), pk(~sigA)>
       leafB    = <$B, lkB, pkB>
@@ -245,7 +227,7 @@ rule Commit_Add:
         , <h(<'KeyPackageRef', kpC>), egsC>
         , info >) ]
 
-/* The joiner at leaf 1 (R2). */
+// The joiner at leaf 1 
 rule Join_Leaf1:
   let leafB = <$B, hpk(~lk), pk(~sigB)>
       kp    = <hpk(~init), leafB>
@@ -273,8 +255,8 @@ rule Join_Leaf1:
   [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA, leafC)
   , !Secrets($B, gid, '1', init1, enc1, ~lk) ]
 
-/* The joiner at leaf 2 (R2). It keeps no state fact: it never commits or
-   processes in this file (R4, R5). */
+/* joiner at leaf 2 (R2). It keeps no state fact: never commits or
+   processes in this file (R4, R5) */
 rule Join_Leaf2:
   let leafC = <$C, hpk(~lk), pk(~sigC)>
       kp    = <hpk(~init), leafC>
@@ -300,11 +282,9 @@ rule Join_Leaf2:
     , GroupKey($C, gid, '1', enc1) ]->
   [ !Secrets($C, gid, '1', init1, enc1, ~lk) ]
 
-/* ------------------------------------------------------------------------
- * Epoch 1 to 2: A removes C, B processes
- * ---------------------------------------------------------------------- */
+// Epoch 1 to 2: A removes C, B processes
 
-/* A commits a Remove of leaf 2 with a path (R3). */
+// A commits a Remove of leaf 2 with a path 
 rule Commit_Remove:
   let leafA   = <$A, hpk(~lk), pk(~sigA)>
       leafB   = <$B, lkB, pkB>
@@ -336,7 +316,7 @@ rule Commit_Remove:
   [ !Secrets($A, gid, '2', init2, enc2, ~lk2)
   , Out(<content, csig, tag2>) ]
 
-/* B (leaf 1) processes A's Remove commit (12.4.2). */
+// B (leaf 1) processes A's Remove commit (12.4.2)
 rule Process_Remove:
   let leafB   = <$B, hpk(~lk), pkB>
       leafA   = <$A, lkA, pkA>
@@ -367,9 +347,7 @@ rule Process_Remove:
     , GroupKey($B, gid, '2', enc2) ]->
   [ !Secrets($B, gid, '2', init2, enc2, ~lk) ]
 
-/* ------------------------------------------------------------------------
- * Adversary (as m1.spthy)
- * ---------------------------------------------------------------------- */
+// Adversary
 
 rule RevSig:
   [ !Ltk($X, ~sig) ]
@@ -394,12 +372,12 @@ restriction init_key_deleted_on_join:
   "All B gid A kp GC es #i #r.
      Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
 
-/* ------------------------------------------------------------------------
- * Lemmas
- * ---------------------------------------------------------------------- */
+// Lemmas
 
-/* The honest run is checked in two parts, to keep each trace short. */
+// honest run checked in two parts, to keep each trace short
 
+/* checks the model can create initial group and have both new 
+members join without any compromise */
 lemma exec_join_both: exists-trace
   "Ex A B C gid kpB kpC GC1 es1 #i #jb #jc.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -417,6 +395,8 @@ lemma exec_join_both: exists-trace
             Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
           & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)"
 
+/* runs through complete remove flow: B joins, A removes C, and B
+processes resulting commit without compromise */
 lemma exec_remove: exists-trace
   "Ex A B C gid kpB kpC GC1 es1 GC2 es2 #i #jb #u #p.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -438,6 +418,8 @@ lemma exec_remove: exists-trace
             Removed(X1, g1, Y1, c1, e1) @ a
           & Removed(X2, g2, Y2, c2, e2) @ b ==> #a = #b)"
 
+/* says that the first epoch's secret stays private unless one of the new
+members was already compromised through its signing key or init key */
 lemma secrecy_epoch1 [reuse]:
   "All A gid B kpB C kpC GC es #i.
      Committed(A, gid, B, kpB, C, kpC, GC, es) @ i
@@ -447,6 +429,8 @@ lemma secrecy_epoch1 [reuse]:
        | (Ex #r. RevInit(B, kpB) @ r)
        | (Ex #r. RevInit(C, kpC) @ r)"
 
+/* makes sure every joined state comes from A's earlier commit, tying the
+later security reasoning to an authentic group history */
 lemma agreement_join [reuse]:
   "All X gid A kp GC es #i.
        Joined(X, gid, A, kp, GC, es) @ i
@@ -454,12 +438,16 @@ lemma agreement_join [reuse]:
             Committed(A, gid, B, kpB, C, kpC, GC, es) @ j & j < i)
        | (Ex #r. RevSig(A) @ r & r < i)"
 
+/* makes sure B only processes a remove commit made by A, so both sides 
+agree on the new epoch and its secret */
 lemma agreement_remove [reuse]:
   "All B gid A C GC es #i.
        Processed(B, gid, A, C, GC, es) @ i
      ==> (Ex #j. Removed(A, gid, C, GC, es) @ j & j < i)
        | (Ex #r. RevSig(A) @ r & r < i)"
 
+/* to show how A's fresh path secret and spells out the two ways B's prior
+compromise could reveal it */
 lemma path_secret_secrecy [reuse]:
   "All A gid B kpB C kpC GC1 es1 i1 ps #i #u.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -469,6 +457,8 @@ lemma path_secret_secrecy [reuse]:
             Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
        | (Ex #r. RevSig(B) @ r & r < i)"
 
+/* main security claim: after removing C, A's epoch 2 key stays
+private even when attacker knows C's state and other allowed secrets */
 lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
   "All A gid B kpB C kpC GC1 es1 GC es k #i #u.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -480,6 +470,8 @@ lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
             Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
        | (Ex #r. RevSig(B) @ r & r < i)"
 
+/* This shows the baseline: C can still recover the old group key from its
+retained epoch-1 state, so the remove operation is needed for forward secrecy */
 lemma control_removed_member_had_key: exists-trace
   "Ex X A C gid GC es k #i #j #r #u.
        GroupKey(X, gid, '1', k) @ i & K(k) @ j
@@ -497,6 +489,8 @@ lemma control_removed_member_had_key: exists-trace
             Committed(A1, g1, B1, k1, C1, k3, c1, e1) @ a
           & Committed(A2, g2, B2, k2, C2, k4, c2, e2) @ b ==> #a = #b)"
 
+/* to show that removing C cannot repair group if B's epoch 1 state was
+compromised before the remove */
 lemma attack_remaining_member_compromised: exists-trace
   "Ex A B C gid GC es i1 ps #u #p #r #x #y.
        Removed(A, gid, C, GC, es) @ u
@@ -519,6 +513,8 @@ lemma attack_remaining_member_compromised: exists-trace
             Removed(X1, g1, Y1, c1, e1) @ a
           & Removed(X2, g2, Y2, c2, e2) @ b ==> #a = #b)"
 
+/* to show why reusing B's KeyPackage across groups is dangerous: a 
+compromise in another group can reveal the path secret here */
 lemma attack_keypackage_reused_in_another_group: exists-trace
   "Ex A B C gid kpB kpC GC1 es1 A2 g2 C2 kpC2 GCb esb i1 ps
       #i #i2 #j #jc #u #r #rc #x #y.

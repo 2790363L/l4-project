@@ -12,4 +12,3 @@ agreement_update (all-traces): verified
 fs_epoch1 (all-traces): verified
 pcs_epoch2 (all-traces): verified
 control_state_reveal (exists-trace): verified
-attack_no_pcs_when_peer_compromised (exists-trace): verified

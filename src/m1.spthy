@@ -53,7 +53,7 @@ rule Commit_Add:
       init0    = expand(~es0, 'init', 'empty')
       ck0      = expand(~es0, 'confirm', 'empty')
       tag0     = mac(ck0, 'empty')
-      interim0 = h(<'empty', tag0>)
+      interim0 = h(<'empty', tag0>)    /* interim transcript hash, epoch 0 */
       content  = <~gid, '0', $A, 'commit', <'add', kp>>
       csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA)
       tree1    = <leafA, leafB>
@@ -69,12 +69,12 @@ rule Commit_Add:
       egs      = hseal(ik, <'Welcome', info>, js)
       interim1 = h(<cth1, tag1>)
       init1    = expand(es1, 'init', 'empty')
-      enc1     = expand(es1, 'encryption', 'empty')
+      enc1     = expand(es1, 'encryption', 'empty')   /* encryption secret, epoch 1 = the group key */
   in
   [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA)
   , !Cred($B, pkB), In(<kp, kpsig>) ]
   --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true)
-    , Neq($A, $B)                                                  /* S8 */
+    , Neq($A, $B)
     , Committed($A, ~gid, $B, kp, GC1, es1)
     , GroupKey($A, ~gid, '1', enc1) ]->
   [ StA1($A, ~gid, GC1, interim1, init1, ~lk, leafA, leafB)
@@ -117,9 +117,9 @@ rule Commit_Update:
       GC1     = <gid, '1', th1, cth1>
       leafB2  = <$B, hpk(~lk2), pk(~sigB)>
       tree2   = <leafA, leafB2>
-      prov    = <gid, '2', h(tree2), cth1>
-      ct      = hseal(lkA, <'UpdatePathNode', prov>, ~ps)
-      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>
+      prov    = <gid, '2', h(tree2), cth1>      /* provisional GroupContext (context for the HPKE seal) */
+      ct      = hseal(lkA, <'UpdatePathNode', prov>, ~ps)    /* ciphertext: path secret sealed to A's leaf key */
+      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>      /* framed content of the Update commit */
       csig    = sign(<'FramedContentTBS', content, GC1>, ~sigB)
       cth2    = h(<interim1, content, csig>)
       GC2     = <gid, '2', h(tree2), cth2>
@@ -286,7 +286,7 @@ lemma control_forged_welcome: exists-trace
      & (All X1 X2 k1 k2 #a #b.
           PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)"
 
-/* M1 lemmas */
+// M1 lemmas 
 
 lemma exec_update: exists-trace
   "Ex A B gid kp GC1 es1 GC2 es2 #i #j #u #p.
@@ -323,30 +323,7 @@ lemma fs_epoch1:
        | (Ex Y #r. RevSig(Y) @ r)
        | (Ex Y kp #r. RevInit(Y, kp) @ r)"
 
-lemma 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-_epoch2:
+lemma pcs_epoch2:
   "All X gid k B GC es #i #u.
        GroupKey(X, gid, '2', k) @ i & Updated(B, gid, GC, es) @ u
      ==> not (Ex #j. K(k) @ j)

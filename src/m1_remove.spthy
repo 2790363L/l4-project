@@ -72,13 +72,15 @@
  * ---------------------------------------------------------------------------
  * exec_join_both       honest run reaches epoch 1 with B and C both
  *                      joined and agreeing with A, no reveal.
- * exec_remove          The honest run reaches epoch 2: B joins, A removes C,
+ * exec_remove          honest run reaches epoch 2: B joins, A removes C,
  *                      B processes, A and B agree, no reveal.
- * secrecy_epoch1       The epoch-1 secret A derived stays secret unless a
+ * secrecy_epoch1       The epoch 1 secret A derived stays secret unless a
  *                      new member's signature key leaked before the commit
  *                      or a new member's init_key leaked. Helper.
- * agreement_join       A joiner's group state is one A committed, unless A's
- *                      signature key leaked first. Helper.
+ * agreement_join       A joiner's GroupContext and epoch secret are ones A
+ *                      committed, unless A's signature key leaked first. It
+ *                      does not say that commit added this joiner's
+ *                      KeyPackage. Helper.
  * agreement_remove     If B processes the Remove, A made that commit with
  *                      the same GroupContext and epoch secret, unless A's
  *                      signature key leaked first. Helper.
@@ -376,7 +378,7 @@ restriction init_key_deleted_on_join:
 
 // honest run checked in two parts, to keep each trace short
 
-/* checks the model can create initial group and have both new 
+/* checks model can create initial group and have both new 
 members join without any compromise */
 lemma exec_join_both: exists-trace
   "Ex A B C gid kpB kpC GC1 es1 #i #jb #jc.
@@ -464,10 +466,15 @@ lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
      & Removed(A, gid, C, GC, es) @ u
      & GroupKey(A, gid, '2', k) @ u
-     ==> not (Ex #j. K(k) @ j)
+        ==> not (Ex #j. K(k) @ j)
        | (Ex #r. RevState(A, gid, '2') @ r)
+       | (Ex A2 GCj esj #j #r.
+            Joined(B, gid, A2, kpB, GCj, esj) @ j & RevState(B, gid, '2') @ r)
+       | (Ex A2 GCj esj #j #r.
+            Joined(B, gid, A2, kpB, GCj, esj) @ j & RevState(B, gid, '1') @ r)
        | (Ex g A2 GCj esj e #j #r.
-            Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
+            Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r
+          & not (g = gid))
        | (Ex #r. RevSig(B) @ r & r < i)"
 
 /* This shows the baseline: C can still recover the old group key from its
@@ -492,12 +499,13 @@ lemma control_removed_member_had_key: exists-trace
 /* to show that removing C cannot repair group if B's epoch 1 state was
 compromised before the remove */
 lemma attack_remaining_member_compromised: exists-trace
-  "Ex A B C gid GC es i1 ps #u #p #r #x #y.
+  "Ex A B C gid GC es i1 ps k #u #p #r #x #y #z.
        Removed(A, gid, C, GC, es) @ u
      & SecretInputs(A, gid, i1, ps) @ u
+     & GroupKey(A, gid, '2', k) @ u
      & Processed(B, gid, A, C, GC, es) @ p
      & RevState(B, gid, '1') @ r & r < u
-     & K(i1) @ x & K(ps) @ y
+     & K(i1) @ x & K(ps) @ y & K(k) @ z
      & (All Y1 Y2 g1 g2 e1 e2 #a #b.
           RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
      & not (Ex Z #s. RevSig(Z) @ s)
@@ -517,7 +525,7 @@ lemma attack_remaining_member_compromised: exists-trace
 compromise in another group can reveal the path secret here */
 lemma attack_keypackage_reused_in_another_group: exists-trace
   "Ex A B C gid kpB kpC GC1 es1 A2 g2 C2 kpC2 GCb esb i1 ps
-      #i #i2 #j #jc #u #r #rc #x #y.
+      #i #i2 #j #jc #u #r #rc #x #y #z.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
      & Committed(A2, g2, B, kpB, C2, kpC2, GCb, esb) @ i2
      & not (g2 = gid)
@@ -526,7 +534,7 @@ lemma attack_keypackage_reused_in_another_group: exists-trace
      & SecretInputs(A, gid, i1, ps) @ u
      & RevState(B, g2, '1') @ r
      & RevState(C, gid, '1') @ rc
-     & K(i1) @ x & K(ps) @ y
+     & K(i1) @ x & K(ps) @ y & K(k) @ z
      & (All Y g e #a. RevState(Y, g, e) @ a ==> (#a = #r) | (#a = #rc))
      & not (Ex Z #s. RevSig(Z) @ s)
      & not (Ex Z k2 #s. RevInit(Z, k2) @ s)

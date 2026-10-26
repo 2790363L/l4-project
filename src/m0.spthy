@@ -24,7 +24,7 @@ restriction one_key_per_identity:
   "All X pk1 pk2 #i #j.
      Register(X, pk1) @ i & Register(X, pk2) @ j ==> #i = #j"
 
-// B publishes a KeyPackage and keeps the private keys behind it
+// B publishes a KeyPackage and keeps the private keys behind it 
 rule Publish_KeyPackage:
   let leaf = <$B, hpk(~lk), pk(~sig)>
       kp   = <hpk(~init), leaf>
@@ -32,9 +32,9 @@ rule Publish_KeyPackage:
   [ !Ltk($B, ~sig), Fr(~init), Fr(~lk) ]
   --[ PublishedKP($B, kp) ]->
   [ KeyPkg($B, ~init, ~lk), !InitKey($B, ~init, kp)
-  , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ]
+  , Out(<kp, sign(<'KeyPackageTBS', kp>, ~sig)>) ] 
 
-/* Protocol */
+// Protocol 
 
 // A creates a one member group at epoch 0. Nothing sent
 rule Create_Group:
@@ -46,27 +46,27 @@ rule Create_Group:
 A takes KeyPackage from the network and checks its signature 
 against the AS binding for the identity in its leaf (12.4.1, 12.4.3.1) */
 rule Commit_Add:
-  let leafA    = <$A, hpk(~lk), pk(~sigA)>
-      leafB    = <$B, lkB, pkB>
-      kp       = <ik, leafB>
-      GC0      = <~gid, '0', h(leafA), 'empty'>
-      init0    = expand(~es0, 'init', 'empty')
-      ck0      = expand(~es0, 'confirm', 'empty')
-      tag0     = mac(ck0, 'empty')
-      interim0 = h(<'empty', tag0>)
-      content  = <~gid, '0', $A, 'commit', <'add', kp>>
-      csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA) /* TBS =To be signed */
-      tree1    = <leafA, leafB>
-      cth1     = h(<interim0, content, csig>)
-      GC1      = <~gid, '1', h(tree1), cth1>
-      js       = expand(extract(init0, 'zero'), 'joiner', GC1)
-      es1      = expand(extract(js, 'zero'), 'epoch', GC1)
-      ck1      = expand(es1, 'confirm', 'empty')
-      tag1     = mac(ck1, cth1)
-      gi       = <GC1, tag1>
-      gisig    = sign(<'GroupInfoTBS', gi>, ~sigA)
-      info     = <gi, gisig, tree1> 
-      egs      = hseal(ik, <'Welcome', info>, js) /* enc group secret */
+  let leafA    = <$A, hpk(~lk), pk(~sigA)>              /* A's leaf node */
+      leafB    = <$B, lkB, pkB>                         /* B's leaf node */
+      kp       = <ik, leafB>                            /* B's KeyPackage */
+      GC0      = <~gid, '0', h(leafA), 'empty'>         /* GroupContext, epoch 0 */
+      init0    = expand(~es0, 'init', 'empty')          /* init secret, epoch 0 */
+      ck0      = expand(~es0, 'confirm', 'empty')       /* confirmation key, epoch 0 */
+      tag0     = mac(ck0, 'empty')                      /* confirmation tag, epoch 0 */
+      interim0 = h(<'empty', tag0>)                     /* interim transcript hash, epoch 0 */
+      content  = <~gid, '0', $A, 'commit', <'add', kp>> /* framed content of the Add commit */
+      csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA) /* commit signature (TBS = to be signed) */
+      tree1    = <leafA, leafB>                         /* ratchet tree, epoch 1 */
+      cth1     = h(<interim0, content, csig>)           /* confirmed transcript hash, epoch 1 */
+      GC1      = <~gid, '1', h(tree1), cth1>            /* GroupContext, epoch 1 */
+      js       = expand(extract(init0, 'zero'), 'joiner', GC1) /* joiner secret */
+      es1      = expand(extract(js, 'zero'), 'epoch', GC1)     /* epoch secret, epoch 1 */
+      ck1      = expand(es1, 'confirm', 'empty')        /* confirmation key, epoch 1 */
+      tag1     = mac(ck1, cth1)                         /* confirmation tag, epoch 1 */
+      gi       = <GC1, tag1>                            /* GroupInfo */
+      gisig    = sign(<'GroupInfoTBS', gi>, ~sigA)      /* GroupInfo signature */
+      info     = <gi, gisig, tree1>                     /* signed GroupInfo + tree, sent in the Welcome */
+      egs      = hseal(ik, <'Welcome', info>, js)       /* encrypted group secrets: js sealed to B's init key */
   in
   [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA) , !Cred($B, pkB), In(<kp, kpsig>) ]
   --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true),
@@ -120,7 +120,6 @@ lemma exec: exists-trace
      & Joined(B, gid, A, kp, GC, es) @ j
      & not (Ex X #r. RevSig(X) @ r)
      & not (Ex X k #r. RevInit(X, k) @ r)
-     /* one of each step, to keep the search small */
      & (All X1 X2 g1 g2 #a #b.
           Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
      & (All X1 X2 k1 k2 #a #b.
@@ -128,7 +127,7 @@ lemma exec: exists-trace
      & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
             Committed(A1, g1, B1, k1, c1, e1) @ a
           & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
-
+b  
 lemma join_once:
   "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #i #j.
        Joined(B, gid1, A1, kp, GC1, es1) @ i

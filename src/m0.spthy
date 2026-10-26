@@ -127,7 +127,7 @@ lemma exec: exists-trace
      & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
             Committed(A1, g1, B1, k1, c1, e1) @ a
           & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
-b  
+  
 lemma join_once:
   "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #i #j.
        Joined(B, gid1, A1, kp, GC1, es1) @ i

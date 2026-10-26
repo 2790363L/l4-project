@@ -1,137 +1,3 @@
-/*
- * M1, slice 2: three members, one Remove commit (RFC 9420)
- *
- * Scope:  A creates a group and adds B and C in one commit (epoch 1). A then
- *         commits a Remove of C with a path, and B processes it (epoch 2).
- *         The question this file answers: does the removed member, or an
- *         adversary who holds everything the removed member knew, learn the
- *         group key of the epoch after its removal?
- * Why a separate file from m1.spthy: every epoch nests the previous epoch's
- *         transcript and secrets, so terms grow about threefold per epoch.
- *         Chaining an Add and a Remove after slice 1's Update would put this
- *         at epoch 4. Here, as in slice 1, the commit under study starts
- *         from epoch 1.
- *         Section numbers refer to RFC 9420.
- *
- * ---------------------------------------------------------------------------
- * NEW IN THIS FILE
- * ---------------------------------------------------------------------------
- * R1  A adds B and C in a single commit carrying two Add proposals (12.4),
- *     with no path (D1). One Welcome carries the joiner secret sealed once
- *     to each new member's init_key, and one GroupInfo (12.4.3.1).
- * R2  The tree is the tuple <leafA, leafB, leafC>. There is one Join rule per
- *     position (leaf 1 and leaf 2). A joiner checks the AS binding of every
- *     leaf in the tree, not only the signer's (12.4.3.1, 7.3), and that the
- *     three identities are distinct (7.3).
- * R3  The Remove is a commit by A with one Remove proposal for leaf 2 and a
- *     path (12.1.3, 12.4). A replaces its own leaf key and sends one fresh
- *     path secret, sealed to B's leaf key only. C gets nothing. The tree
- *     after the commit is <leafA2, leafB>.
- * R4  Fixed roles: only A commits, only C is removed, only B processes.
- *     Results about "the removed member" and "a remaining member" hold for
- *     this one assignment.
- * R5  C never processes its own removal and never deletes its epoch-1 state,
- *     so RevState(C, gid, '1') is possible at any time. That is the
- *     strongest adversary for the removal lemma. (12.4.2 says a removed
- *     client SHOULD delete its state promptly.)
- *
- * ---------------------------------------------------------------------------
- * STATE FACTS
- * ---------------------------------------------------------------------------
- * As m0.spthy, plus:
- * StA1($A, gid, GC1, interim1, init1, ~lk, leafA, leafB, leafC)
- * StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA, leafC)
- *                          Linear. What A and B need to leave epoch 1.
- * !Secrets($X, gid, ep, init, enc, lk)
- *                          Read only by RevState. C has one for epoch 1.
- *
- * ---------------------------------------------------------------------------
- * MESSAGES NEW IN THIS FILE
- * ---------------------------------------------------------------------------
- * Welcome (R1):
- *   tree1 = <leafA, leafB, leafC>
- *   content = <~gid, '0', $A, 'commit', <<'add', kpB>, <'add', kpC>>>
- *   info  = <gi, gisig, tree1>                 gi, gisig as in m0.spthy
- *   msg   = < <h(<'KeyPackageRef', kpB>), hseal(ikB, <'Welcome', info>, js)>
- *           , <h(<'KeyPackageRef', kpC>), hseal(ikC, <'Welcome', info>, js)>
- *           , info >
- *   Each joiner reads its own entry and info.
- *
- * Remove commit (R3):
- *   leafA2 = <$A, hpk(~lk2), pk(~sigA)>
- *   tree2  = <leafA2, leafB>
- *   prov   = <gid, '2', h(tree2), cth1>
- *   ct     = hseal(lkB, <'UpdatePathNode', prov>, ~ps)
- *   content = <gid, '1', $A, 'commit', <'remove', 'leaf2'>,
- *              <'path', leafA2, ct>>
- *   csig, cth2, GC2, js2, es2, tag2 as in m1.spthy
- *   msg    = <content, csig, tag2>
- *
- * ---------------------------------------------------------------------------
- * LEMMAS
- * ---------------------------------------------------------------------------
- * exec_join_both       honest run reaches epoch 1 with B and C both
- *                      joined and agreeing with A, no reveal.
- * exec_remove          honest run reaches epoch 2: B joins, A removes C,
- *                      B processes, A and B agree, no reveal.
- * secrecy_epoch1       The epoch 1 secret A derived stays secret unless a
- *                      new member's signature key leaked before the commit
- *                      or a new member's init_key leaked. Helper.
- * agreement_join       A joiner's GroupContext and epoch secret are ones A
- *                      committed, unless A's signature key leaked first. It
- *                      does not say that commit added this joiner's
- *                      KeyPackage. Helper.
- * agreement_remove     If B processes the Remove, A made that commit with
- *                      the same GroupContext and epoch secret, unless A's
- *                      signature key leaked first. Helper.
- * path_secret_secrecy  The path secret of A's Remove commit stays secret
- *                      unless B's signature key leaked before A's Add commit
- *                      (a forged KeyPackage, as in m0.spthy), or B's state
- *                      leaked in a group that B joined with the KeyPackage A
- *                      used. That group need not be this one. Helper.
- * removal_security     The epoch-2 group key that A derives when it removes
- *                      C stays secret. The adversary may hold everything of
- *                      C's (its epoch-1 state at any time, its signature key,
- *                      its init_key), A's epoch-1 state, A's signature key
- *                      and B's init_key. Excuses: A's epoch-2 state, and the
- *                      two excuses of path_secret_secrecy.
- *                      The lemma is about A's own key. B's key is the same
- *                      term whenever agreement_remove applies: both rules
- *                      compute the group key from the epoch secret alone.
- *                      An earlier form quantified over any party holding an
- *                      epoch-2 key under the same group id, with excuses
- *                      limited to this group. It did not finish in seven
- *                      minutes and was dropped.
- * control_removed_member_had_key
- *                      exists-trace. C's epoch-1 state does give the
- *                      epoch-1 group key, so the removal is what protects
- *                      epoch 2.
- * attack_remaining_member_compromised
- *                      exists-trace. If B's epoch-1 state leaked before the
- *                      Remove, the adversary knows both secret inputs of
- *                      epoch 2's key schedule. Removing C does not heal a
- *                      compromise of B.
- * attack_keypackage_reused_in_another_group
- *                      exists-trace. Two creators add B with the same
- *                      KeyPackage. B joins the other group, and its state
- *                      there leaks. Together with C's state the adversary
- *                      knows both secret inputs of epoch 2 here, although no
- *                      state of A or B in this group leaked and no signature
- *                      key or init_key leaked. This is why the second excuse
- *                      of path_secret_secrecy names any group. The model
- *                      lets a KeyPackage be used any number of times; RFC
- *                      9420 says KeyPackages SHOULD NOT be reused, except a
- *                      "last resort" KeyPackage (10, 16.8).
- *
- * ---------------------------------------------------------------------------
- * NOTES
- * ---------------------------------------------------------------------------
- * Flags: --derivcheck-timeout=300 --open-chains=30. 
- * Tactic: removal_security uses the tactic `removal`, which solves goals
- *     about the path secret before anything else, and hides secrecy_epoch1.
- *     Without both it did not finish in nine minutes.
- */
-
 theory M1Remove
 
 configuration: "--stop-on-trace=SEQDFS"
@@ -142,9 +8,6 @@ builtins: hashing, signing
 functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
 equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
 
-/* For removal_security. Proof ends where the adversary needs the path
-   secret, so goals that mention it are solved first: the fresh name itself,
-   then any term built from the commit secret expand(~ps, 'path', 'empty') */
 tactic: removal
 presort: s
 prio:
@@ -448,8 +311,8 @@ lemma agreement_remove [reuse]:
      ==> (Ex #j. Removed(A, gid, C, GC, es) @ j & j < i)
        | (Ex #r. RevSig(A) @ r & r < i)"
 
-/* to show how A's fresh path secret and spells out the two ways B's prior
-compromise could reveal it */
+/* A's fresh path secret stays secret, and shows the two ways B's
+prior compromise could reveal it */
 lemma path_secret_secrecy [reuse]:
   "All A gid B kpB C kpC GC1 es1 i1 ps #i #u.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -477,8 +340,8 @@ lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
           & not (g = gid))
        | (Ex #r. RevSig(B) @ r & r < i)"
 
-/* This shows the baseline: C can still recover the old group key from its
-retained epoch-1 state, so the remove operation is needed for forward secrecy */
+/* This shows baseline: C can still recover old group key from its retained 
+epoch-1 state, so it is remove that keeps C out of epoch 2 */
 lemma control_removed_member_had_key: exists-trace
   "Ex X A C gid GC es k #i #j #r #u.
        GroupKey(X, gid, '1', k) @ i & K(k) @ j
@@ -532,6 +395,7 @@ lemma attack_keypackage_reused_in_another_group: exists-trace
      & Joined(B, g2, A2, kpB, GCb, esb) @ j
      & Joined(C, gid, A, kpC, GC1, es1) @ jc
      & SecretInputs(A, gid, i1, ps) @ u
+     & GroupKey(A, gid, '2', k) @ u
      & RevState(B, g2, '1') @ r
      & RevState(C, gid, '1') @ rc
      & K(i1) @ x & K(ps) @ y & K(k) @ z

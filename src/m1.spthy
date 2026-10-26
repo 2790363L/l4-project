@@ -351,4 +351,26 @@ lemma control_state_reveal: exists-trace
             Updated(X1, g1, c1, e1) @ a
           & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
 
+lemma attack_no_pcs_when_peer_compromised: exists-trace
+  "Ex A B gid GC es i1 ps #u #p #r #x #y.
+       Updated(B, gid, GC, es) @ u
+     & SecretInputs(B, gid, i1, ps) @ u
+     & Processed(A, gid, B, GC, es) @ p
+     & RevState(A, gid, '1') @ r & r < u
+     & K(i1) @ x & K(ps) @ y
+     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
+          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
+     & not (Ex X #s. RevSig(X) @ s)
+     & not (Ex X k2 #s. RevInit(X, k2) @ s)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
+            Updated(X1, g1, c1, e1) @ a
+          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+
 end

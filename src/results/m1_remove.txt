@@ -1,3 +1,4 @@
+WARNING: the following wellformedness checks failed!
 exec_join_both (exists-trace): verified
 exec_remove (exists-trace): verified
 secrecy_epoch1 (all-traces): verified

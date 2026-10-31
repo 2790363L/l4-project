@@ -322,8 +322,8 @@ lemma path_secret_secrecy [reuse]:
             Joined(B, g, A2, kpB, GCj, esj) @ j & RevState(B, g, e) @ r)
        | (Ex #r. RevSig(B) @ r & r < i)"
 
-/* main security claim: after removing C, A's epoch 2 key stays
-private even when attacker knows C's state and other allowed secrets */
+/* after removing C, A's epoch 2 key stays private even when 
+attacker knows C's state and other allowed secrets */
 lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
   "All A gid B kpB C kpC GC1 es1 GC es k #i #u.
        Committed(A, gid, B, kpB, C, kpC, GC1, es1) @ i
@@ -340,7 +340,7 @@ lemma removal_security [heuristic={removal}, hide_lemma=secrecy_epoch1]:
           & not (g = gid))
        | (Ex #r. RevSig(B) @ r & r < i)"
 
-/* This shows baseline: C can still recover old group key from its retained 
+/* C can still recover old group key from its retained 
 epoch-1 state, so it is remove that keeps C out of epoch 2 */
 lemma control_removed_member_had_key: exists-trace
   "Ex X A C gid GC es k #i #j #r #u.

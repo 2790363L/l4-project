@@ -176,8 +176,10 @@ rule RevSig:
   --[ RevSig($X) ]->
   [ Out(~sig) ]
 
-/* Reveals init key behind a KeyPackage. Only possible before B joins
-   with it: B deletes key on joining */
+/* Reveals the init key behind a KeyPackage, at any time, including after B
+   has joined with it. RFC 9420 does not require B to delete the key, so the
+   model does not assume it. Every lemma excuses any RevInit, so this covers
+   both a client that deletes the key and one that keeps it. */
 rule RevInit:
   [ !InitKey($B, ~init, kp) ]
   --[ RevInit($B, kp) ]->
@@ -194,10 +196,6 @@ rule RevState:
 restriction state_deleted_on_leaving:
   "All X gid ep #r #t.
      RevState(X, gid, ep) @ r & Left(X, gid, ep) @ t ==> r < t"
-
-restriction init_key_deleted_on_join:
-  "All B gid A kp GC es #i #r.
-     Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
 
 // Lemmas
 
@@ -320,7 +318,7 @@ lemma fs_epoch1:
      GroupKey(X, gid, '1', k) @ i
      ==> not (Ex #j. K(k) @ j)
        | (Ex Y #r. RevState(Y, gid, '1') @ r)
-       | (Ex Y #r. RevSig(Y) @ r)
+       | (Ex Y #r. RevSig(Y) @ r & r < i)
        | (Ex Y kp #r. RevInit(Y, kp) @ r)"
 
 lemma pcs_epoch2:
@@ -372,5 +370,25 @@ lemma attack_no_pcs_when_peer_compromised: exists-trace
      & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
             Updated(X1, g1, c1, e1) @ a
           & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+
+/* B keeps its init key after joining and it leaks later: the adversary
+   opens the Welcome and reads epoch 1. Nothing else is revealed. With the old
+   init_key_deleted_on_join restriction Tamarin found no such trace. */
+lemma attack_fs_needs_init_key_deleted: exists-trace
+  "Ex B gid A kp GC es k #i #r #x.
+       Joined(B, gid, A, kp, GC, es) @ i
+     & GroupKey(B, gid, '1', k) @ i
+     & RevInit(B, kp) @ r & i < r
+     & K(k) @ x
+     & not (Ex Y #s. RevSig(Y) @ s)
+     & not (Ex Y g e #s. RevState(Y, g, e) @ s)
+     & (All Y kp2 #s. RevInit(Y, kp2) @ s ==> #s = #r)
+     & (All X1 X2 g1 g2 #a #b.
+          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
+     & (All X1 X2 k1 k2 #a #b.
+          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
+            Committed(A1, g1, B1, k1, c1, e1) @ a
+          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
 
 end

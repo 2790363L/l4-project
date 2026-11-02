@@ -101,16 +101,14 @@ rule RevSig:
   --[ RevSig($X) ]->
   [ Out(~sig) ]
 
-/* Reveals init key behind a KeyPackage. Only possible before B joins
-   with it: B deletes the key on joining. */
+/* Reveals the init key behind a KeyPackage, at any time, including after B
+   has joined with it. RFC 9420 does not require B to delete the key, so the
+   model does not assume it. Every lemma excuses any RevInit, so this covers
+   both a client that deletes the key and one that keeps it. */
 rule RevInit:
   [ !InitKey($B, ~init, kp) ]
   --[ RevInit($B, kp) ]->
   [ Out(~init) ]
-
-restriction init_key_deleted_on_join:
-  "All B gid A kp GC es #i #r.
-     Joined(B, gid, A, kp, GC, es) @ i & RevInit(B, kp) @ r ==> r < i"
 
 // Lemmas 
 

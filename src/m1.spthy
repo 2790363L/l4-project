@@ -1,7 +1,27 @@
+/* {m}PK(k) = HPKE seal of m to public key k   
+   {m}sk(X) = X's signature on m
+   Setup: the AS binds each identity X to a signing key (Register_sig).
+
+   1. B → A : KP_B, {KP_B}sk(B)
+   2. A → B : ref(KP_B), {js}PK(init_B), GI, {GI}sk(A), tree1
+   3. B → A : U, {U, GC1}sk(B), tag2
+
+   where
+     messages 1-2 and their terms as in m0 (tree1 = <leaf_A, leaf_B>)
+     U (update)= <gid, 1, B, commit, path: leaf_B', {ps}PK(lk_A)>
+                 B's update commit; leaf_B' has a fresh leaf key lk_B'
+     ps        = fresh path secret, sealed to A's current leaf key
+     cs        = expand(ps, 'path')           commit secret
+     es2       = derived from init1 (epoch 1) and cs
+     tag2      = mac(confirm key of es2, cth2)
+
+   A checks {U, GC1}sk(B), opens {ps} with lk_A, recomputes tag2 and
+   checks lk_B' differs from lk_B. GC1 is signed over but not sent. */
+
 theory M1
 begin
 
-builtins: hashing, signing
+builtins: hashing, signing, natural-numbers
 
 functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
 equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
@@ -36,29 +56,32 @@ rule Publish_KeyPackage:
 
 // Protocol
 
-// A creates a one member group at epoch 0. Nothing sent
+/* A creates a one member group at epoch 0. Nothing sent.
+   Tamarin's naturals start at %1, so model epoch %1 is 
+   RFC epoch 0. Every later epoch is derived from
+   it by adding %1 (RFC 8.1, 12: +1 per Commit) */
 rule Create_Group:
   [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
   --[ Created($A, ~gid) ]->
-  [ Group0($A, ~gid, ~lk, ~es0) ]
+  [ Group0($A, ~gid, %1, ~lk, ~es0) ]
 
 /* A commits Add of B with no path and sends the Welcome. 
 A takes KeyPackage from the network and checks its signature 
-against the AS binding for the identity in its leaf (12.4.1, 12.4.3.1) */
+against the AS binding for the identity in its leaf (10.1, 12.4.1) */
 rule Commit_Add:
   let leafA    = <$A, hpk(~lk), pk(~sigA)>
       leafB    = <$B, lkB, pkB>
       kp       = <ik, leafB>
-      GC0      = <~gid, '0', h(leafA), 'empty'>
+      GC0      = <~gid, %e, h(leafA), 'empty'>
       init0    = expand(~es0, 'init', 'empty')
       ck0      = expand(~es0, 'confirm', 'empty')
       tag0     = mac(ck0, 'empty')
       interim0 = h(<'empty', tag0>)    /* interim transcript hash, epoch 0 */
-      content  = <~gid, '0', $A, 'commit', <'add', kp>>
+      content  = <~gid, %e, $A, 'commit', <'add', kp>>
       csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA)
       tree1    = <leafA, leafB>
       cth1     = h(<interim0, content, csig>)
-      GC1      = <~gid, '1', h(tree1), cth1>
+      GC1      = <~gid, %e %+ %1, h(tree1), cth1>
       js       = expand(extract(init0, 'zero'), 'joiner', GC1)
       es1      = expand(extract(js, 'zero'), 'epoch', GC1)
       ck1      = expand(es1, 'confirm', 'empty')
@@ -71,14 +94,14 @@ rule Commit_Add:
       init1    = expand(es1, 'init', 'empty')
       enc1     = expand(es1, 'encryption', 'empty')   /* encryption secret, epoch 1 = the group key */
   in
-  [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA)
+  [ Group0($A, ~gid, %e, ~lk, ~es0), !Ltk($A, ~sigA)
   , !Cred($B, pkB), In(<kp, kpsig>) ]
   --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true)
     , Neq($A, $B)
     , Committed($A, ~gid, $B, kp, GC1, es1)
-    , GroupKey($A, ~gid, '1', enc1) ]->
+    , GroupKey($A, ~gid, %e %+ %1, enc1) ]->
   [ StA1($A, ~gid, GC1, interim1, init1, ~lk, leafA, leafB)
-  , !Secrets($A, ~gid, '1', init1, enc1, ~lk)
+  , !Secrets($A, ~gid, %e %+ %1, init1, enc1, ~lk)
   , Out(<h(<'KeyPackageRef', kp>), egs, info>) ]
 
 /* B joins from a Welcome. Opening egs is done by pattern
@@ -88,7 +111,7 @@ rule Join:
       kp    = <hpk(~init), leafB>
       leafA = <$A, lkA, pkA>
       tree1 = <leafA, leafB>
-      GC1   = <gid, '1', h(tree1), cth1>
+      GC1   = <gid, %e, h(tree1), cth1>
       gi    = <GC1, tag1>
       info  = <gi, gisig, tree1>
       egs   = hseal(hpk(~init), <'Welcome', info>, js)
@@ -103,9 +126,9 @@ rule Join:
   --[ Eq(verify(gisig, <'GroupInfoTBS', gi>, pkA), true)
     , Eq(tag1, mac(ck1, cth1))
     , Joined($B, gid, $A, kp, GC1, es1)
-    , GroupKey($B, gid, '1', enc1) ]->
+    , GroupKey($B, gid, %e, enc1) ]->
   [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA)
-  , !Secrets($B, gid, '1', init1, enc1, ~lk) ]
+  , !Secrets($B, gid, %e, init1, enc1, ~lk) ]
 
 
 /* B (leaf 1) commits an update of its own leaf with a path.
@@ -114,15 +137,15 @@ rule Join:
 rule Commit_Update:
   let leafB   = <$B, hpk(~lk), pk(~sigB)>
       leafA   = <$A, lkA, pkA>
-      GC1     = <gid, '1', th1, cth1>
+      GC1     = <gid, %e, th1, cth1>
       leafB2  = <$B, hpk(~lk2), pk(~sigB)>
       tree2   = <leafA, leafB2>
-      prov    = <gid, '2', h(tree2), cth1>      /* provisional GroupContext (context for the HPKE seal) */
+      prov    = <gid, %e %+ %1, h(tree2), cth1>      /* provisional GroupContext (context for the HPKE seal) */
       ct      = hseal(lkA, <'UpdatePathNode', prov>, ~ps)    /* ciphertext: path secret sealed to A's leaf key */
-      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>      /* framed content of the Update commit */
+      content = <gid, %e, $B, 'commit', <'path', leafB2, ct>>      /* framed content of the Update commit */
       csig    = sign(<'FramedContentTBS', content, GC1>, ~sigB)
       cth2    = h(<interim1, content, csig>)
-      GC2     = <gid, '2', h(tree2), cth2>
+      GC2     = <gid, %e %+ %1, h(tree2), cth2>
       cs      = expand(~ps, 'path', 'empty')
       js2     = expand(extract(init1, cs), 'joiner', GC2)
       es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
@@ -133,25 +156,25 @@ rule Commit_Update:
   in
   [ StB1($B, gid, GC1, interim1, init1, ~lk, leafB, leafA)
   , !Ltk($B, ~sigB), Fr(~lk2), Fr(~ps) ]
-  --[ Left($B, gid, '1')
+  --[ Left($B, gid, %e)
     , Updated($B, gid, GC2, es2)
     , SecretInputs($B, gid, init1, ~ps)
-    , GroupKey($B, gid, '2', enc2) ]->
-  [ !Secrets($B, gid, '2', init2, enc2, ~lk2)
+    , GroupKey($B, gid, %e %+ %1, enc2) ]->
+  [ !Secrets($B, gid, %e %+ %1, init2, enc2, ~lk2)
   , Out(<content, csig, tag2>) ]
 
 // A (leaf 0) processes B's commit (12.4.2)
 rule Process_Update:
   let leafA   = <$A, hpk(~lk), pkA>
       leafB   = <$B, lkB, pkB>
-      GC1     = <gid, '1', th1, cth1>
+      GC1     = <gid, %e, th1, cth1>
       leafB2  = <$B, lkB2, pkB>
       tree2   = <leafA, leafB2>
-      prov    = <gid, '2', h(tree2), cth1>
+      prov    = <gid, %e %+ %1, h(tree2), cth1>
       ct      = hseal(hpk(~lk), <'UpdatePathNode', prov>, ps)
-      content = <gid, '1', $B, 'commit', <'path', leafB2, ct>>
+      content = <gid, %e, $B, 'commit', <'path', leafB2, ct>>
       cth2    = h(<interim1, content, csig>)
-      GC2     = <gid, '2', h(tree2), cth2>
+      GC2     = <gid, %e %+ %1, h(tree2), cth2>
       cs      = expand(ps, 'path', 'empty')
       js2     = expand(extract(init1, cs), 'joiner', GC2)
       es2     = expand(extract(js2, 'zero'), 'epoch', GC2)
@@ -164,10 +187,10 @@ rule Process_Update:
   --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkB), true)
     , Eq(tag2, mac(ck2, cth2))
     , Neq(lkB, lkB2)
-    , Left($A, gid, '1')
+    , Left($A, gid, %e)
     , Processed($A, gid, $B, GC2, es2)
-    , GroupKey($A, gid, '2', enc2) ]->
-  [ !Secrets($A, gid, '2', init2, enc2, ~lk) ]
+    , GroupKey($A, gid, %e %+ %1, enc2) ]->
+  [ !Secrets($A, gid, %e %+ %1, init2, enc2, ~lk) ]
 
 // Adversary
 
@@ -176,219 +199,251 @@ rule RevSig:
   --[ RevSig($X) ]->
   [ Out(~sig) ]
 
-/* Reveals the init key behind a KeyPackage, at any time, including after B
-   has joined with it. RFC 9420 does not require B to delete the key, so the
-   model does not assume it. Every lemma excuses any RevInit, so this covers
-   both a client that deletes the key and one that keeps it. */
 rule RevInit:
   [ !InitKey($B, ~init, kp) ]
   --[ RevInit($B, kp) ]->
   [ Out(~init) ]
 
-/* Reveals what member X holds for one epoch of one group (9.2): the init
-   secret, the message-protection secret and X's leaf private key. Only
-   possible while X is in that epoch. */
+/* Reveals what X holds for one epoch of one group: init secret,
+   message-protection secret and X's leaf private key */
 rule RevState:
   [ !Secrets($X, gid, ep, init, enc, lk) ]
   --[ RevState($X, gid, ep) ]->
   [ Out(<init, enc, lk>) ]
 
-restriction state_deleted_on_leaving:
-  "All X gid ep #r #t.
-     RevState(X, gid, ep) @ r & Left(X, gid, ep) @ t ==> r < t"
-
 // Lemmas
 
 lemma exec: exists-trace
-  "Ex A B gid kp GC es #i #j.
-       Committed(A, gid, B, kp, GC, es) @ i
-     & Joined(B, gid, A, kp, GC, es) @ j
-     & not (Ex X #r. RevSig(X) @ r)
-     & not (Ex X k #r. RevInit(X, k) @ r)
+  "Ex A B gid kp GC es #commit #join.
+       Committed(A, gid, B, kp, GC, es) @ commit
+     & Joined(B, gid, A, kp, GC, es) @ join
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     & not (Ex X k #revInit. RevInit(X, k) @ revInit)
      /* one of each step, to keep the search small */
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)"
 
 lemma join_once:
-  "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #i #j.
-       Joined(B, gid1, A1, kp, GC1, es1) @ i
-     & Joined(B, gid2, A2, kp, GC2, es2) @ j
-     ==> #i = #j"
+  "All B kp gid1 gid2 A1 A2 GC1 GC2 es1 es2 #join1 #join2.
+       Joined(B, gid1, A1, kp, GC1, es1) @ join1
+     & Joined(B, gid2, A2, kp, GC2, es2) @ join2
+     ==> #join1 = #join2"
 
+
+/* A's epoch 1 secret stays private unless B's signing key leaked
+before commit, or init key of B's KeyPackage is ever revealed.
+reuse so later lemmas can assume this instead of re-proving it */
 lemma secrecy_committer [reuse]:
-  "All A gid B kp GC es #i.
-     Committed(A, gid, B, kp, GC, es) @ i
-     ==> not (Ex #k. K(es) @ k)
-       | (Ex #r. RevSig(B) @ r & r < i)
-       | (Ex #r. RevInit(B, kp) @ r)"
+  "All A gid B kp GC es #commit.
+     Committed(A, gid, B, kp, GC, es) @ commit
+     ==> not (Ex #learn. K(es) @ learn)
+       | (Ex #revSig. RevSig(B) @ revSig & revSig < commit)
+       | (Ex #revInit. RevInit(B, kp) @ revInit)"
 
+
+/* if B joins, A really committed that group state and epoch secret
+earlier, unless A's signing key leaked first. says nothing about
+who A added. reuse as shortcut for later lemmas to jump straight to A's 
+commit */
 lemma agreement_state [reuse]:
-  "All B gid A kp GC es #i.
-       Joined(B, gid, A, kp, GC, es) @ i
-     ==> (Ex B2 kp2 #j. Committed(A, gid, B2, kp2, GC, es) @ j & j < i)
-       | (Ex #r. RevSig(A) @ r & r < i)"
+  "All B gid A kp GC es #join.
+       Joined(B, gid, A, kp, GC, es) @ join
+     ==> (Ex B2 kp2 #commit. Committed(A, gid, B2, kp2, GC, es) @ commit & commit < join)
+       | (Ex #revSig. RevSig(A) @ revSig & revSig < join)"
 
+/* B's epoch 1 secret stays private unless A's or B's signing key
+leaked before the join, or init key of B's KeyPackage is ever revealed */
 lemma secrecy_joiner:
-  "All B gid A kp GC es #i.
-     Joined(B, gid, A, kp, GC, es) @ i
-     ==> not (Ex #k. K(es) @ k)
-       | (Ex #r. RevSig(A) @ r & r < i)
-       | (Ex #r. RevSig(B) @ r & r < i)
-       | (Ex #r. RevInit(B, kp) @ r)"
+  "All B gid A kp GC es #join.
+     Joined(B, gid, A, kp, GC, es) @ join
+     ==> not (Ex #learn. K(es) @ learn)
+       | (Ex #revSig. RevSig(A) @ revSig & revSig < join)
+       | (Ex #revSig. RevSig(B) @ revSig & revSig < join)
+       | (Ex #revInit. RevInit(B, kp) @ revInit)"
 
+/* if B joins, A really committed to adding B with that same KeyPackage,
+group state and epoch secret earlier, unless A's or B's signing key
+leaked before the join */
 lemma agreement_keypackage:
-  "All B gid A kp GC es #i.
-       Joined(B, gid, A, kp, GC, es) @ i
-     ==> (Ex #j. Committed(A, gid, B, kp, GC, es) @ j & j < i)
-       | (Ex #r. RevSig(A) @ r & r < i)
-       | (Ex #r. RevSig(B) @ r & r < i)"
+  "All B gid A kp GC es #join.
+       Joined(B, gid, A, kp, GC, es) @ join
+     ==> (Ex #commit. Committed(A, gid, B, kp, GC, es) @ commit & commit < join)
+       | (Ex #revSig. RevSig(A) @ revSig & revSig < join)
+       | (Ex #revSig. RevSig(B) @ revSig & revSig < join)"
 
 // Attack lemmas
 
+/* attacker learns B's epoch 1 secret with A's signing key and all init
+keys safe: B's own signing key is enough, so secrecy_joiner needs it */
 lemma attack_joiner_secrecy_needs_own_key: exists-trace
-  "Ex B gid A kp GC es #i #k.
-       Joined(B, gid, A, kp, GC, es) @ i & K(es) @ k
-     & not (Ex #r. RevSig(A) @ r)
-     & not (Ex X k2 #r. RevInit(X, k2) @ r)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+  "Ex B gid A kp GC es #join #learn.
+       Joined(B, gid, A, kp, GC, es) @ join & K(es) @ learn
+     & not (Ex #revSig. RevSig(A) @ revSig)
+     & not (Ex X k2 #revInit. RevInit(X, k2) @ revInit)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)"
 
+/* B joins with a KeyPackage A never committed to, with A's signing key
+and all init keys safe: agreement_keypackage needs B's signing key excuse */
 lemma attack_keypackage_agreement_needs_own_key: exists-trace
-  "Ex B gid A kp GC es #i.
-       Joined(B, gid, A, kp, GC, es) @ i
-     & not (Ex #j. Committed(A, gid, B, kp, GC, es) @ j)
-     & not (Ex #r. RevSig(A) @ r)
-     & not (Ex X k2 #r. RevInit(X, k2) @ r)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+  "Ex B gid A kp GC es #join.
+       Joined(B, gid, A, kp, GC, es) @ join
+     & not (Ex #commit. Committed(A, gid, B, kp, GC, es) @ commit)
+     & not (Ex #revSig. RevSig(A) @ revSig)
+     & not (Ex X k2 #revInit. RevInit(X, k2) @ revInit)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)"
 
+/* B joins though nobody committed: only possible with A's leaked signing
+key, so the agreement lemmas need that excuse */
 lemma control_forged_welcome: exists-trace
-  "Ex B gid A kp GC es #i.
-       Joined(B, gid, A, kp, GC, es) @ i
-     & not (Ex A2 g2 B2 k2 c2 e2 #j. Committed(A2, g2, B2, k2, c2, e2) @ j)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)"
+  "Ex B gid A kp GC es #join.
+       Joined(B, gid, A, kp, GC, es) @ join
+     & not (Ex A2 g2 B2 k2 c2 e2 #commit. Committed(A2, g2, B2, k2, c2, e2) @ commit)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)"
 
 // M1 lemmas 
 
+/* checks the honest run reaches epoch 2: A adds B, B joins, B updates,
+A processes it, with no compromise */
 lemma exec_update: exists-trace
-  "Ex A B gid kp GC1 es1 GC2 es2 #i #j #u #p.
-       Committed(A, gid, B, kp, GC1, es1) @ i
-     & Joined(B, gid, A, kp, GC1, es1) @ j
-     & Updated(B, gid, GC2, es2) @ u
-     & Processed(A, gid, B, GC2, es2) @ p
-     & not (Ex X #r. RevSig(X) @ r)
-     & not (Ex X k #r. RevInit(X, k) @ r)
-     & not (Ex X g e #r. RevState(X, g, e) @ r)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
-     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
-            Updated(X1, g1, c1, e1) @ a
-          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+  "Ex A B gid kp GC1 es1 GC2 es2 #commit #join #update #process.
+       Committed(A, gid, B, kp, GC1, es1) @ commit
+     & Joined(B, gid, A, kp, GC1, es1) @ join
+     & Updated(B, gid, GC2, es2) @ update
+     & Processed(A, gid, B, GC2, es2) @ process
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     & not (Ex X k #revInit. RevInit(X, k) @ revInit)
+     & not (Ex X g e #revState. RevState(X, g, e) @ revState)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #update1 #update2.
+            Updated(X1, g1, c1, e1) @ update1
+          & Updated(X2, g2, c2, e2) @ update2 ==> #update1 = #update2)"
 
+
+/* A only processes an update that B really made, with same
+   group state and epoch secret, unless A's or B's signing key
+   leaked first.
+reuse so fs_epoch1 and pcs_epoch2 can assume processed update 
+came from B (cuts out the forged-commit cases) */
 lemma agreement_update [reuse]:
-  "All A gid B GC es #i.
-       Processed(A, gid, B, GC, es) @ i
-     ==> (Ex #j. Updated(B, gid, GC, es) @ j & j < i)
-       | (Ex #r. RevSig(B) @ r & r < i)
-       | (Ex #r. RevSig(A) @ r & r < i)"
+  "All A gid B GC es #process.
+       Processed(A, gid, B, GC, es) @ process
+     ==> (Ex #update. Updated(B, gid, GC, es) @ update & update < process)
+       | (Ex #revSig. RevSig(B) @ revSig & revSig < process)
+       | (Ex #revSig. RevSig(A) @ revSig & revSig < process)"
 
+
+/* forward secrecy: epoch 1 group key stays private even if any
+   epoch 2 state leaks, unless some member's epoch 1 state leaked,
+   a signing key leaked before key was set, or an init key is ever
+   revealed */
 lemma fs_epoch1:
-  "All X gid k #i.
-     GroupKey(X, gid, '1', k) @ i
-     ==> not (Ex #j. K(k) @ j)
-       | (Ex Y #r. RevState(Y, gid, '1') @ r)
-       | (Ex Y #r. RevSig(Y) @ r & r < i)
-       | (Ex Y kp #r. RevInit(Y, kp) @ r)"
+  "All X gid k #getKey.
+     GroupKey(X, gid, %1 %+ %1, k) @ getKey
+     ==> not (Ex #learn. K(k) @ learn)
+       | (Ex Y #revState. RevState(Y, gid, %1 %+ %1) @ revState)
+       | (Ex Y #revSig. RevSig(Y) @ revSig & revSig < getKey)
+       | (Ex Y kp #revInit. RevInit(Y, kp) @ revInit)"
 
+/* after B's update, epoch 2 key stays private even if B's epoch 1
+    state was revealed, unless other member's epoch 1 state,
+    any epoch 2 state, or any signing or init key leaked */
 lemma pcs_epoch2:
-  "All X gid k B GC es #i #u.
-       GroupKey(X, gid, '2', k) @ i & Updated(B, gid, GC, es) @ u
-     ==> not (Ex #j. K(k) @ j)
-       | (Ex Y #r. RevState(Y, gid, '2') @ r)
-       | (Ex Y #r. RevState(Y, gid, '1') @ r & not (Y = B))
-       | (Ex Y #r. RevSig(Y) @ r)
-       | (Ex Y kp #r. RevInit(Y, kp) @ r)"
+  "All X gid k B GC es #getKey #update.
+       GroupKey(X, gid, %1 %+ %1 %+ %1, k) @ getKey & Updated(B, gid, GC, es) @ update
+     ==> not (Ex #learn. K(k) @ learn)
+       | (Ex Y #revState. RevState(Y, gid, %1 %+ %1 %+ %1) @ revState)
+       | (Ex Y #revState. RevState(Y, gid, %1 %+ %1) @ revState & not (Y = B))
+       | (Ex Y #revSig. RevSig(Y) @ revSig)
+       | (Ex Y kp #revInit. RevInit(Y, kp) @ revInit)"
 
+
+/* revealing one member's epoch 1 state gives away epoch 1
+   group key, so state-reveal excuse in fs_epoch1 is needed */
 lemma control_state_reveal: exists-trace
-  "Ex X Y gid k #i #j #r.
-       GroupKey(X, gid, '1', k) @ i & K(k) @ j
-     & RevState(Y, gid, '1') @ r
-     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
-          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
-     & not (Ex Z #s. RevSig(Z) @ s)
-     & not (Ex Z k2 #s. RevInit(Z, k2) @ s)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
-     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
-            Updated(X1, g1, c1, e1) @ a
-          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+  "Ex X Y gid k #getKey #learn #revState.
+       GroupKey(X, gid, %1 %+ %1, k) @ getKey & K(k) @ learn
+     & RevState(Y, gid, %1 %+ %1) @ revState
+     & (All Y1 Y2 g1 g2 e1 e2 #revState1 #revState2.
+          RevState(Y1, g1, e1) @ revState1 & RevState(Y2, g2, e2) @ revState2 ==> #revState1 = #revState2)
+     & not (Ex Z #revSig. RevSig(Z) @ revSig)
+     & not (Ex Z k2 #revInit. RevInit(Z, k2) @ revInit)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #update1 #update2.
+            Updated(X1, g1, c1, e1) @ update1
+          & Updated(X2, g2, c2, e2) @ update2 ==> #update1 = #update2)"
 
+
+/* if A's epoch 1 state leaked before B's update, attacker learns
+both inputs to epoch 2: B's update cannot heal A's compromise */
 lemma attack_no_pcs_when_peer_compromised: exists-trace
-  "Ex A B gid GC es i1 ps #u #p #r #x #y.
-       Updated(B, gid, GC, es) @ u
-     & SecretInputs(B, gid, i1, ps) @ u
-     & Processed(A, gid, B, GC, es) @ p
-     & RevState(A, gid, '1') @ r & r < u
-     & K(i1) @ x & K(ps) @ y
-     & (All Y1 Y2 g1 g2 e1 e2 #a #b.
-          RevState(Y1, g1, e1) @ a & RevState(Y2, g2, e2) @ b ==> #a = #b)
-     & not (Ex X #s. RevSig(X) @ s)
-     & not (Ex X k2 #s. RevInit(X, k2) @ s)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)
-     & (All X1 X2 g1 g2 c1 c2 e1 e2 #a #b.
-            Updated(X1, g1, c1, e1) @ a
-          & Updated(X2, g2, c2, e2) @ b ==> #a = #b)"
+  "Ex A B gid GC es i1 ps #update #process #revState #learnInit #learnPs.
+       Updated(B, gid, GC, es) @ update
+     & SecretInputs(B, gid, i1, ps) @ update
+     & Processed(A, gid, B, GC, es) @ process
+     & RevState(A, gid, %1 %+ %1) @ revState & revState < update
+     & K(i1) @ learnInit & K(ps) @ learnPs
+     & (All Y1 Y2 g1 g2 e1 e2 #revState1 #revState2.
+          RevState(Y1, g1, e1) @ revState1 & RevState(Y2, g2, e2) @ revState2 ==> #revState1 = #revState2)
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     & not (Ex X k2 #revInit. RevInit(X, k2) @ revInit)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)
+     & (All X1 X2 g1 g2 c1 c2 e1 e2 #update1 #update2.
+            Updated(X1, g1, c1, e1) @ update1
+          & Updated(X2, g2, c2, e2) @ update2 ==> #update1 = #update2)"
 
-/* B keeps its init key after joining and it leaks later: the adversary
-   opens the Welcome and reads epoch 1. Nothing else is revealed. With the old
-   init_key_deleted_on_join restriction Tamarin found no such trace. */
+/* B keeps init key after joining and it leaks later: adversary
+   opens the Welcome and reads epoch 1. Nothing else is revealed */
 lemma attack_fs_needs_init_key_deleted: exists-trace
-  "Ex B gid A kp GC es k #i #r #x.
-       Joined(B, gid, A, kp, GC, es) @ i
-     & GroupKey(B, gid, '1', k) @ i
-     & RevInit(B, kp) @ r & i < r
-     & K(k) @ x
-     & not (Ex Y #s. RevSig(Y) @ s)
-     & not (Ex Y g e #s. RevState(Y, g, e) @ s)
-     & (All Y kp2 #s. RevInit(Y, kp2) @ s ==> #s = #r)
-     & (All X1 X2 g1 g2 #a #b.
-          Created(X1, g1) @ a & Created(X2, g2) @ b ==> #a = #b)
-     & (All X1 X2 k1 k2 #a #b.
-          PublishedKP(X1, k1) @ a & PublishedKP(X2, k2) @ b ==> #a = #b)
-     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #a #b.
-            Committed(A1, g1, B1, k1, c1, e1) @ a
-          & Committed(A2, g2, B2, k2, c2, e2) @ b ==> #a = #b)"
+  "Ex B gid A kp GC es k #join #revInit #learn.
+       Joined(B, gid, A, kp, GC, es) @ join
+     & GroupKey(B, gid, %1 %+ %1, k) @ join
+     & RevInit(B, kp) @ revInit & join < revInit
+     & K(k) @ learn
+     & not (Ex Y #revSig. RevSig(Y) @ revSig)
+     & not (Ex Y g e #revState. RevState(Y, g, e) @ revState)
+     & (All Y kp2 #anyRevInit. RevInit(Y, kp2) @ anyRevInit ==> #anyRevInit = #revInit)
+     & (All X1 X2 g1 g2 #create1 #create2.
+          Created(X1, g1) @ create1 & Created(X2, g2) @ create2 ==> #create1 = #create2)
+     & (All X1 X2 k1 k2 #publish1 #publish2.
+          PublishedKP(X1, k1) @ publish1 & PublishedKP(X2, k2) @ publish2 ==> #publish1 = #publish2)
+     & (All A1 A2 g1 g2 B1 B2 k1 k2 c1 c2 e1 e2 #commit1 #commit2.
+            Committed(A1, g1, B1, k1, c1, e1) @ commit1
+          & Committed(A2, g2, B2, k2, c2, e2) @ commit2 ==> #commit1 = #commit2)"
 
 end

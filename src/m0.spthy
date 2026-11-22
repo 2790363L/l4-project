@@ -1,7 +1,27 @@
+/* {m}PK(k) = HPKE seal of m to public key k   {m}sk(X) = X's signature on m
+   Setup: the AS binds each identity X to a signing key (Register_sig).
+
+   1. B → A : KP_B, {KP_B}sk(B)
+   2. A → B : ref(KP_B), {js}PK(init_B), GI, {GI}sk(A), tree1
+
+   where
+     leaf_X = <X, PK(lk_X), pk(X)>         leaf node: identity, leaf key, signing key
+     KP_B   = <PK(init_B), leaf_B>         KeyPackage
+     ref(KP)= h(<'KeyPackageRef', KP>)
+     tree1  = <leaf_A, leaf_B>
+     GI     = <GC1, tag1>                  GroupInfo, GC1 = <gid, 1, h(tree1), cth1>
+     js     = joiner secret from A's epoch 0 secret; the Add has no path,
+              so no fresh commit secret goes in
+     tag1   = mac(confirm key of es1, cth1), es1 derived from js
+
+   A checks {KP_B}sk(B) against B's credential before committing.
+   B checks {GI}sk(A) against A's credential and recomputes tag1.
+   The Add commit itself is not sent: A is the only member of epoch 0. */
+
 theory M0
 begin
 
-builtins: hashing, signing
+builtins: hashing, signing, natural-numbers
 
 functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2
 equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m
@@ -40,7 +60,7 @@ rule Publish_KeyPackage:
 rule Create_Group:
   [ !Ltk($A, ~sig), Fr(~gid), Fr(~lk), Fr(~es0) ]
   --[ Created($A, ~gid) ]->
-  [ Group0($A, ~gid, ~lk, ~es0) ]
+  [ Group0($A, ~gid, %1, ~lk, ~es0) ]
 
 /* A commits Add of B with no path and sends the Welcome. 
 A takes KeyPackage from the network and checks its signature 
@@ -49,16 +69,16 @@ rule Commit_Add:
   let leafA    = <$A, hpk(~lk), pk(~sigA)>              /* A's leaf node */
       leafB    = <$B, lkB, pkB>                         /* B's leaf node */
       kp       = <ik, leafB>                            /* B's KeyPackage */
-      GC0      = <~gid, '0', h(leafA), 'empty'>         /* GroupContext, epoch 0 */
+      GC0      = <~gid, %e, h(leafA), 'empty'>         /* GroupContext, epoch 0 */
       init0    = expand(~es0, 'init', 'empty')          /* init secret, epoch 0 */
       ck0      = expand(~es0, 'confirm', 'empty')       /* confirmation key, epoch 0 */
       tag0     = mac(ck0, 'empty')                      /* confirmation tag, epoch 0 */
       interim0 = h(<'empty', tag0>)                     /* interim transcript hash, epoch 0 */
-      content  = <~gid, '0', $A, 'commit', <'add', kp>> /* framed content of the Add commit */
+      content  = <~gid, %e, $A, 'commit', <'add', kp>> /* framed content of the Add commit */
       csig     = sign(<'FramedContentTBS', content, GC0>, ~sigA) /* commit signature (TBS = to be signed) */
       tree1    = <leafA, leafB>                         /* ratchet tree, epoch 1 */
       cth1     = h(<interim0, content, csig>)           /* confirmed transcript hash, epoch 1 */
-      GC1      = <~gid, '1', h(tree1), cth1>            /* GroupContext, epoch 1 */
+      GC1      = <~gid, %e %+ %1, h(tree1), cth1>            /* GroupContext, epoch 1 */
       js       = expand(extract(init0, 'zero'), 'joiner', GC1) /* joiner secret */
       es1      = expand(extract(js, 'zero'), 'epoch', GC1)     /* epoch secret, epoch 1 */
       ck1      = expand(es1, 'confirm', 'empty')        /* confirmation key, epoch 1 */
@@ -68,7 +88,7 @@ rule Commit_Add:
       info     = <gi, gisig, tree1>                     /* signed GroupInfo + tree, sent in the Welcome */
       egs      = hseal(ik, <'Welcome', info>, js)       /* encrypted group secrets: js sealed to B's init key */
   in
-  [ Group0($A, ~gid, ~lk, ~es0), !Ltk($A, ~sigA) , !Cred($B, pkB), In(<kp, kpsig>) ]
+  [ Group0($A, ~gid, %e, ~lk, ~es0), !Ltk($A, ~sigA) , !Cred($B, pkB), In(<kp, kpsig>) ]
   --[ Eq(verify(kpsig, <'KeyPackageTBS', kp>, pkB), true),
       Neq($A, $B), Committed($A, ~gid, $B, kp, GC1, es1) ]->
   [ Out(<h(<'KeyPackageRef', kp>), egs, info>) ]
@@ -80,7 +100,7 @@ rule Join:
       kp    = <hpk(~init), leafB>
       leafA = <$A, lkA, pkA>
       tree1 = <leafA, leafB>
-      GC1   = <gid, '1', h(tree1), cth1>
+      GC1   = <gid, %e, h(tree1), cth1>
       gi    = <GC1, tag1>
       info  = <gi, gisig, tree1>
       egs   = hseal(hpk(~init), <'Welcome', info>, js)
@@ -101,10 +121,6 @@ rule RevSig:
   --[ RevSig($X) ]->
   [ Out(~sig) ]
 
-/* Reveals the init key behind a KeyPackage, at any time, including after B
-   has joined with it. RFC 9420 does not require B to delete the key, so the
-   model does not assume it. Every lemma excuses any RevInit, so this covers
-   both a client that deletes the key and one that keeps it. */
 rule RevInit:
   [ !InitKey($B, ~init, kp) ]
   --[ RevInit($B, kp) ]->

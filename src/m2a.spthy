@@ -61,6 +61,173 @@ rule Setup_Group:
   , !Secrets($D, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkD, ~zk, ~yk>)
   , Out(<tree1, GC1, ~int1>) ]
 
-
+rule Commit_Path:
+  let leafA   = <$A, hpk(~lkA), pk(~sA)>
+      leafB   = <idB, ekB, pkB>
+      tree1   = tree(pY1, tree(pX1, leafA, leafB), tree(pZ, leafC, leafD))
+      GC1     = <gid, %e, th1, cth1>
+      leafA2  = <$A, hpk(~lkA2), pk(~sA)>
+      ps1     = expand(~ps0, 'path', 'empty')
+      nkX     = expand(~ps0, 'node', 'empty')
+      nkY     = expand(ps1, 'node', 'empty')
+      cs      = expand(ps1, 'path', 'empty')
+      tree2   = tree(hpk(nkY), tree(hpk(nkX), leafA2, leafB), tree(pZ, leafC, leafD))
+      thA2    = h(<'leaf', '0', leafA2>)
+      thB     = h(<'leaf', '1', leafB>)
+      thC     = h(<'leaf', '2', leafC>)
+      thD     = h(<'leaf', '3', leafD>)
+      thX2    = h(<'parent', hpk(nkX), thA2, thB>)
+      thZ     = h(<'parent', pZ, thC, thD>)
+      th2     = h(<'parent', hpk(nkY), thX2, thZ>)
+      prov    = <gid, %e %+ %1, th2, cth1>
+      ctB     = hseal(ekB, <'UpdatePathNode', prov>, ~ps0)
+      ctZ     = hseal(pZ, <'UpdatePathNode', prov>, ps1)
+      upath   = <leafA2, <hpk(nkX), ctB>, <hpk(nkY), ctZ>>
+      content = <gid, %e, $A, 'commit', <'path', upath>>
+      csig    = sign(<'FramedContentTBS', content, GC1>, ~sA)
+      cth2    = h(<int1, content, csig>)
+      GC2     = <gid, %e %+ %1, th2, cth2>
+      es2     = expand(extract(init1, cs), 'epoch', GC2)
+      tag2    = mac(expand(es2, 'confirm', 'empty'), cth2)
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StA1($A, gid, tree1, GC1, int1, init1, ~lkA), !Ltk($A, ~sA)
+  , Fr(~lkA2), Fr(~ps0) ]
+  --[ Left($A, gid, %e)
+    , Committed($A, gid, content, GC2, es2)
+    , NodeKey($A, gid, 'X', nkX)
+    , PathSecrets($A, gid, init1, ~ps0, ps1)
+    , GroupKey($A, gid, %e %+ %1, enc2) ]->
+  [ !Secrets($A, gid, %e %+ %1, <enc2, ~lkA2, nkX, nkY>)
+  , Out(<content, csig, tag2>) ]
   
+
+rule Process_B:
+  let leafA   = <$A, ekA, pkA>
+      leafB   = <$B, hpk(~lkB), pkB>
+      tree1   = tree(pY1, tree(pX1, leafA, leafB), tree(pZ, leafC, leafD))
+      GC1     = <gid, %e, th1, cth1>
+      leafA2  = <$A, ekA2, pkA>
+      ps1     = expand(ps0, 'path', 'empty')
+      nkX     = expand(ps0, 'node', 'empty')
+      nkY     = expand(ps1, 'node', 'empty')
+      cs      = expand(ps1, 'path', 'empty')
+      tree2   = tree(hpk(nkY), tree(hpk(nkX), leafA2, leafB), tree(pZ, leafC, leafD))
+      thA2    = h(<'leaf', '0', leafA2>)
+      thB     = h(<'leaf', '1', leafB>)
+      thC     = h(<'leaf', '2', leafC>)
+      thD     = h(<'leaf', '3', leafD>)
+      thX2    = h(<'parent', hpk(nkX), thA2, thB>)
+      thZ     = h(<'parent', pZ, thC, thD>)
+      th2     = h(<'parent', hpk(nkY), thX2, thZ>)
+      prov    = <gid, %e %+ %1, th2, cth1>
+      ctB     = hseal(hpk(~lkB), <'UpdatePathNode', prov>, ps0)  
+      upath   = <leafA2, <hpk(nkX), ctB>, <hpk(nkY), ctZ>>
+      content = <gid, %e, $A, 'commit', <'path', upath>>
+      cth2    = h(<int1, content, csig>)
+      GC2     = <gid, %e %+ %1, th2, cth2>
+      es2     = expand(extract(init1, cs), 'epoch', GC2)
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StB1($B, gid, tree1, GC1, int1, init1, ~lkB)
+  , In(<content, csig, tag2>) ]
+  --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkA), true)
+    , Eq(tag2, mac(expand(es2, 'confirm', 'empty'), cth2))
+    , Neq(ekA, ekA2)
+    , Left($B, gid, %e)
+    , Processed($B, gid, $A, content, GC2, es2)
+    , GroupKey($B, gid, %e %+ %1, enc2) ]->
+  [ !Secrets($B, gid, %e %+ %1, <enc2, ~lkB, nkX, nkY>) ]
+
+
+
+rule Process_Z:
+  let leafA   = <$A, ekA, pkA>
+      tree1   = tree(pY1, tree(pX1, leafA, leafB), tree(hpk(~zk), leafC, leafD))
+      GC1     = <gid, %e, th1, cth1>
+      leafA2  = <$A, ekA2, pkA>
+      nkY     = expand(ps1, 'node', 'empty')
+      cs      = expand(ps1, 'path', 'empty')
+      tree2   = tree(hpk(nkY), tree(pubX, leafA2, leafB), tree(hpk(~zk), leafC, leafD))
+      thA2    = h(<'leaf', '0', leafA2>)
+      thB     = h(<'leaf', '1', leafB>)
+      thC     = h(<'leaf', '2', leafC>)
+      thD     = h(<'leaf', '3', leafD>)
+      thX2    = h(<'parent', pubX, thA2, thB>)
+      thZ     = h(<'parent', hpk(~zk), thC, thD>)
+      th2     = h(<'parent', hpk(nkY), thX2, thZ>)
+      prov    = <gid, %e %+ %1, th2, cth1>
+      ctZ     = hseal(hpk(~zk), <'UpdatePathNode', prov>, ps1)
+      upath   = <leafA2, <pubX, ctB>, <hpk(nkY), ctZ>>
+      content = <gid, %e, $A, 'commit', <'path', upath>>
+      cth2    = h(<int1, content, csig>)
+      GC2     = <gid, %e %+ %1, th2, cth2>
+      es2     = expand(extract(init1, cs), 'epoch', GC2)
+      enc2    = expand(es2, 'encryption', 'empty')
+  in
+  [ StZ1($P, gid, tree1, GC1, int1, init1, ~lk, ~zk)
+  , In(<content, csig, tag2>) ]
+  --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkA), true)
+    , Eq(tag2, mac(expand(es2, 'confirm', 'empty'), cth2))
+    , Neq(ekA, ekA2)
+    , Left($P, gid, %e)
+    , Processed($P, gid, $A, content, GC2, es2)
+    , GroupKey($P, gid, %e %+ %1, enc2) ]->
+  [ !Secrets($P, gid, %e %+ %1, <enc2, ~lk, ~zk, nkY>) ]
+
+rule Reject_B:
+  let leafA   = <$A, ekA, pkA>
+      leafB   = <$B, hpk(~lkB), pkB>
+      tree1   = tree(pY1, tree(pX1, leafA, leafB), tree(pZ, leafC, leafD))
+      GC1     = <gid, %e, th1, cth1>
+      leafA2  = <$A, ekA2, pkA>
+      thA2    = h(<'leaf', '0', leafA2>)
+      thB     = h(<'leaf', '1', leafB>)
+      thC     = h(<'leaf', '2', leafC>)
+      thD     = h(<'leaf', '3', leafD>)
+      thX2    = h(<'parent', pubX, thA2, thB>)
+      thZ     = h(<'parent', pZ, thC, thD>)
+      th2     = h(<'parent', pubY, thX2, thZ>)
+      prov    = <gid, %e %+ %1, th2, cth1>
+      ctB     = hseal(hpk(~lkB), <'UpdatePathNode', prov>, ps0)
+      upath   = <leafA2, <pubX, ctB>, <pubY, ctZ>>
+      content = <gid, %e, $A, 'commit', <'path', upath>>
+  in
+  [ StB1($B, gid, tree1, GC1, int1, init1, ~lkB)
+  , In(<content, csig, tag2>) ]
+  --[ Eq(verify(csig, <'FramedContentTBS', content, GC1>, pkA), true)
+    , Neq(<pubX, pubY>,
+          <hpk(expand(ps0, 'node', 'empty')),
+           hpk(expand(expand(ps0, 'path', 'empty'), 'node', 'empty'))>)
+    , Rejected($B, gid, $A, content) ]->
+  [ ]
+
+rule RevSig:
+  [ !Ltk($X, ~sig) ]
+  --[ RevSig($X) ]->
+  [ Out(~sig) ]
+
+rule RevState:
+  [ !Secrets($X, gid, ep, s) ]
+  --[ RevState($X, gid, ep) ]->
+  [ Out(s) ]
+
+// Lemmas
+
+lemma exec_commit: exists-trace
+  "Ex A B C D gid content GC es #setup #commit #procB #procC #procD.
+       Setup(gid, A, B, C, D) @ setup
+     & Committed(A, gid, content, GC, es) @ commit
+     & Processed(B, gid, A, content, GC, es) @ procB
+     & Processed(C, gid, A, content, GC, es) @ procC
+     & Processed(D, gid, A, content, GC, es) @ procD
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     & not (Ex X g e #revState. RevState(X, g, e) @ revState)
+     /* search bound: one group only */
+     & (All g1 g2 A1 A2 B1 B2 C1 C2 D1 D2 #setup1 #setup2.
+            Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
+            ==> #setup1 = #setup2)"
+
+
+
 end

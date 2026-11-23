@@ -1,3 +1,43 @@
+/* {m}PK(k) = HPKE seal of m to public key k
+              (info: 'UpdatePathNode' and the provisional GroupContext)
+   {m}sk(X) = X's signature on m
+   Setup: the AS binds each identity X to a signing key (Register_sig).
+          Setup_Group creates the epoch-1 group A, B, C, D (trusted, T1):
+          tree1 = tree(Y, tree(X, A, B), tree(Z, C, D)); each member holds
+          the private keys of the nodes above its leaf (4.2).
+
+     Tree (epoch 1 → epoch 2 after A's commit):
+
+              Y                        Y'          ← ps1 sealed to Z
+            /   \                    /   \
+           X     Z       -->        X'    Z        ← ps0 sealed to B
+          / \   / \                / \   / \
+         A   B C   D              A'  B C   D
+
+   A's direct path: X, Y (refreshed, primed).  Copath: B, Z.
+   B opens ps0 → X', Y', cs.   C, D open ps1 (via Z) → Y', cs.
+
+   1. A → B, C, D : U, {U, GC1}sk(A), tag2
+
+   where
+     ps0   = fresh path secret
+     ps1   = expand(ps0, 'path')         nkX = expand(ps0, 'node')
+     cs    = expand(ps1, 'path')         nkY = expand(ps1, 'node')
+     U     = <gid, 1, A, commit, path: leaf_A', <X', {ps0}PK(lk_B)>,
+                                               <Y', {ps1}PK(Z)>>
+             A's commit; leaf_A' has a fresh leaf key,
+             X' = hpk(nkX), Y' = hpk(nkY)
+     prov  = <gid, 2, th(tree2), cth1>    provisional GroupContext (12.4.1)
+     th    = tree hash, bottom-up (7.8)
+     es2   = derived from init1 (epoch 1), cs and GC2
+     tag2  = mac(confirm key of es2, cth2)
+
+   B checks {U, GC1}sk(A), opens {ps0} with lk_B, derives X' and Y' and
+   compares them with U's, recomputes tag2, checks lk_A' differs from lk_A.
+   C and D do the same but open {ps1} with Z's key, so they can only
+   compare Y'. If B's derived keys differ, B logs Rejected (Reject_B).
+   Epochs: model %1 = RFC epoch 0, so RFC epoch 1 is %1 %+ %1 (as m1). */
+
 theory M2a
 begin
 
@@ -24,7 +64,12 @@ restriction one_key_per_identity:
   "All X pk1 pk2 #reg1 #reg2.
      Register(X, pk1) @ reg1 & Register(X, pk2) @ reg2 ==> #reg1 = #reg2"
 
-
+/* the group starts at RFC epoch 1 (%1 %+ %1). each member gets the
+   private keys of the nodes above its leaf (tree invariant, 4.2): A, B
+   get X and Y, C, D get Z and Y. tree hash is bottom up (7.8): leaves
+   hash their index and leaf node, parents their key and both
+   children's hashes. no join attacks here, the adversary has no say in
+   how the group formed */
 rule Setup_Group:
   let leafA = <$A, hpk(~lkA), pk(~sA)>
       leafB = <$B, hpk(~lkB), pk(~sB)>
@@ -61,6 +106,11 @@ rule Setup_Group:
   , !Secrets($D, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkD, ~zk, ~yk>)
   , Out(<tree1, GC1, ~int1>) ]
 
+/* A commits with a path (12.4.1). one fresh ps0, then a chain: ps0 ->
+   ps1 -> cs (7.4), A's copath is B and Z, so ps0 is sealed to B's leaf 
+   key and ps1 to Z's key (7.5). ciphertexts are bound to the provisional 
+   GroupContext, which has cth1 not cth2, since cth2 hashes the ciphertexts 
+   themselves (12.4.1). A consumes its epoch 1 state and keeps no path secrets */
 rule Commit_Path:
   let leafA   = <$A, hpk(~lkA), pk(~sA)>
       leafB   = <idB, ekB, pkB>
@@ -101,7 +151,11 @@ rule Commit_Path:
   [ !Secrets($A, gid, %e %+ %1, <enc2, ~lkA2, nkX, nkY>)
   , Out(<content, csig, tag2>) ]
   
-
+/* B processes A's commit (12.4.2). B's ciphertext must open with B's leaf key, 
+   and the UpdatePath's keys for X and Y must be exactly the ones B derives 
+   from ps0 (7.5 step 6), otherwise the rule can't fire. also checks A's signature 
+   (with A's key from B's own tree), the confirmation tag, and that A's leaf
+   key changed. B keeps its leaf key, nobody replaced it */
 rule Process_B:
   let leafA   = <$A, ekA, pkA>
       leafB   = <$B, hpk(~lkB), pkB>
@@ -140,7 +194,11 @@ rule Process_B:
   [ !Secrets($B, gid, %e %+ %1, <enc2, ~lkB, nkX, nkY>) ]
 
 
-
+/* C or D processes A's commit through Z (12.4.2). one rule for both,
+   since both hold Z's key and open the same ciphertext. they get ps1,
+   so they can check Y's key but not X's: pubX is taken as sent. this
+   is the gap a malicious A uses in attack_fragmentation lemma. Z's key
+   isn't replaced, so it stays in the epoch 2 state */
 rule Process_Z:
   let leafA   = <$A, ekA, pkA>
       tree1   = tree(pY1, tree(pX1, leafA, leafB), tree(hpk(~zk), leafC, leafD))
@@ -175,6 +233,11 @@ rule Process_Z:
     , GroupKey($P, gid, %e %+ %1, enc2) ]->
   [ !Secrets($P, gid, %e %+ %1, <enc2, ~lk, ~zk, nkY>) ]
 
+
+/* B rejects (16.12): A's signature is fine and B's ciphertext opens,
+   but at least one of the keys B derives differs from the UpdatePath
+   (Neq on the pair). B drops its state and logs Rejected. no Left, so
+   B's old state can still be revealed */
 rule Reject_B:
   let leafA   = <$A, ekA, pkA>
       leafB   = <$B, hpk(~lkB), pkB>
@@ -214,6 +277,8 @@ rule RevState:
 
 // Lemmas
 
+/* an honest run where A commits and B, C and D all process
+   the same commit and reach the same GroupContext and epoch secret. */
 lemma exec_commit: exists-trace
   "Ex A B C D gid content GC es #setup #commit #procB #procC #procD.
        Setup(gid, A, B, C, D) @ setup
@@ -221,6 +286,7 @@ lemma exec_commit: exists-trace
      & Processed(B, gid, A, content, GC, es) @ procB
      & Processed(C, gid, A, content, GC, es) @ procC
      & Processed(D, gid, A, content, GC, es) @ procD
+     /* claim: honest run, no compromise */
      & not (Ex X #revSig. RevSig(X) @ revSig)
      & not (Ex X g e #revState. RevState(X, g, e) @ revState)
      /* search bound: one group only */
@@ -228,6 +294,137 @@ lemma exec_commit: exists-trace
             Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
             ==> #setup1 = #setup2)"
 
+/* the epoch 2 key from A's commit stays secret, even if every signing
+   key leaked, unless some member's state in this group leaked (any
+   epoch, any time). signing keys don't help: a forged commit gives a
+   different epoch, not A's. says nothing about which reveal is needed,
+   see control lemma below */
+lemma secrecy_epoch2:
+  "All A gid content GC es k #commit.
+       Committed(A, gid, content, GC, es) @ commit
+     & GroupKey(A, gid, %1 %+ %1 %+ %1, k) @ commit
+     ==> not (Ex #learn. K(k) @ learn)
+       | (Ex Y e #revState. RevState(Y, gid, e) @ revState)"
 
+/* C's epoch 1 state alone gives A's epoch 2 key: Z's key opens ctZ
+   (public) for ps1, and init1 is in the same state. so the state
+   reveal excuse in secrecy_epoch2 is needed, and one copath member's
+   old state is enough */
+lemma control_epoch2_from_copath_state: exists-trace
+  "Ex A B C D gid content GC es k #setup #commit #learn #revState.
+       Setup(gid, A, B, C, D) @ setup
+     & Committed(A, gid, content, GC, es) @ commit
+     & GroupKey(A, gid, %1 %+ %1 %+ %1, k) @ commit
+     & K(k) @ learn
+     & RevState(C, gid, %1 %+ %1) @ revState
+     /* minimality: C's epoch-1 state is the only compromise */
+     & (All Y g e #reveal. RevState(Y, g, e) @ reveal ==> #reveal = #revState)
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     /* search bound: one group only */
+     & (All g1 g2 A1 A2 B1 B2 C1 C2 D1 D2 #setup1 #setup2.
+            Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
+            ==> #setup1 = #setup2)"
 
+/* tree invariant (4.2): X's new private key is known only to A and B,
+   the members below X, unless A's epoch 2 state or any state of B
+   leaked. nothing of C's or D's and no signing key is an excuse: they
+   only ever get ps1, and the path secret chain only goes up */
+lemma tree_invariant_X:
+  "All A B C D gid nk #setup #commit.
+       Setup(gid, A, B, C, D) @ setup & NodeKey(A, gid, 'X', nk) @ commit
+     ==> not (Ex #learn. K(nk) @ learn)
+       | (Ex #revState. RevState(A, gid, %1 %+ %1 %+ %1) @ revState)
+       | (Ex e #revState. RevState(B, gid, e) @ revState)"
+
+/* B's epoch 1 state alone gives X's new key: B's leaf key isn't
+   replaced by A's commit, so it opens ctB for ps0. so the epoch 1 part
+   of B's excuse in tree_invariant_X is needed */
+lemma control_X_from_sibling_leaf: exists-trace
+  "Ex A B C D gid nk #setup #commit #learn #revState.
+       Setup(gid, A, B, C, D) @ setup & NodeKey(A, gid, 'X', nk) @ commit
+     & K(nk) @ learn
+     & RevState(B, gid, %1 %+ %1) @ revState
+     /* minimality: B's epoch-1 state is the only compromise */
+     & (All Y g e #reveal. RevState(Y, g, e) @ reveal ==> #reveal = #revState)
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     /* search bound: one group only */
+     & (All g1 g2 A1 A2 B1 B2 C1 C2 D1 D2 #setup1 #setup2.
+            Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
+            ==> #setup1 = #setup2)"
+
+/* forward secrecy (16.6): the epoch 1 key stays secret even if every
+   epoch 2 state and every signing key leaks, unless some epoch 1
+   state leaked (any time, so deletion isn't assumed). no RevSig
+   excuse since m2 has no joins */
+lemma fs_epoch1:
+  "All X gid k #getKey.
+     GroupKey(X, gid, %1 %+ %1, k) @ getKey
+     ==> not (Ex #learn. K(k) @ learn)
+       | (Ex Y #revState. RevState(Y, gid, %1 %+ %1) @ revState)"
+
+/* FS on the tree (7.5): X's old key, which A's commit replaces, leaks
+   only through A's or B's epoch 1 state, the only states that ever
+   held it. no epoch 2 state and nothing of C's or D's reveals it.
+   says nothing about Z's key, which the commit doesn't replace */
+lemma fs_tree_replaced_key:
+  "All A B C D gid xk yk zk #setup.
+       Setup(gid, A, B, C, D) @ setup & SetupKeys(gid, xk, yk, zk) @ setup
+     ==> not (Ex #learn. K(xk) @ learn)
+       | (Ex #revState. RevState(A, gid, %1 %+ %1) @ revState)
+       | (Ex #revState. RevState(B, gid, %1 %+ %1) @ revState)"
+
+/* path secrets aren't forward secret: after B, C and D have all
+   processed the commit, C's epoch 2 state alone still gives ps1,
+   because Z's key outlives the commit and ctZ is public. deleting
+   the path secret (7.5) doesn't help while the key that opens it is
+   alive. the same holds for B's leaf key and ps0 (no lemma yet) */
+lemma attack_path_secret_not_forward_secret: exists-trace
+  "Ex A B C D gid content GC es i1 ps0 ps1
+      #setup #commit #procB #procC #procD #revState #learn.
+       Setup(gid, A, B, C, D) @ setup
+     & Committed(A, gid, content, GC, es) @ commit
+     & PathSecrets(A, gid, i1, ps0, ps1) @ commit
+     & Processed(B, gid, A, content, GC, es) @ procB
+     & Processed(C, gid, A, content, GC, es) @ procC
+     & Processed(D, gid, A, content, GC, es) @ procD
+     & RevState(C, gid, %1 %+ %1 %+ %1) @ revState
+     & procB < revState & procC < revState & procD < revState
+     & K(ps1) @ learn
+     /* minimality: C's epoch-2 state is the only compromise */
+     & (All Y g e #reveal. RevState(Y, g, e) @ reveal ==> #reveal = #revState)
+     & not (Ex X #revSig. RevSig(X) @ revSig)
+     /* search bound: one group only */
+     & (All g1 g2 A1 A2 B1 B2 C1 C2 D1 D2 #setup1 #setup2.
+            Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
+            ==> #setup1 = #setup2)"
+
+/* if B rejects a commit from A that C accepts (the group splits),
+   the adversary had A's signing key and some epoch 1 state of this
+   group. signing key: honest A never sends an inconsistent commit.
+   epoch 1 state: the confirmation tag needs init1. says nothing
+   about whether this is enough, see attack_fragmentation (16.12) */
+lemma consistency_needs_insider:
+  "All A B C gid content GC es #reject #process.
+       Rejected(B, gid, A, content) @ reject
+     & Processed(C, gid, A, content, GC, es) @ process
+     ==> (Ex #revSig. RevSig(A) @ revSig)
+       & (Ex Y #revState. RevState(Y, gid, %1 %+ %1) @ revState)"
+
+/* a malicious A (A's signing key and A's state, nothing else) can
+   make C and D accept a commit that B rejects: B gets a ps0 that
+   doesn't match X's key, C and D get a consistent ps1 and can't
+   check X. so the insider conditions above are enough (16.12) */
+lemma attack_fragmentation: exists-trace
+  "Ex A B C D gid content GC es #setup #reject #procC #procD.
+       Setup(gid, A, B, C, D) @ setup
+     & Rejected(B, gid, A, content) @ reject
+     & Processed(C, gid, A, content, GC, es) @ procC
+     & Processed(D, gid, A, content, GC, es) @ procD
+     /* minimality: only A is compromised (malicious insider) */
+     & (All Y g e #reveal. RevState(Y, g, e) @ reveal ==> Y = A)
+     & (All X #revSig. RevSig(X) @ revSig ==> X = A)
+     /* search bound: one group only */
+     & (All g1 g2 A1 A2 B1 B2 C1 C2 D1 D2 #setup1 #setup2.
+            Setup(g1, A1, B1, C1, D1) @ setup1 & Setup(g2, A2, B2, C2, D2) @ setup2
+            ==> #setup1 = #setup2)"
 end

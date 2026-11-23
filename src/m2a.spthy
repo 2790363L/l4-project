@@ -1,0 +1,66 @@
+theory M2a
+begin
+
+builtins: hashing, signing, natural-numbers
+
+functions: hpk/1, hseal/3, hopen/3, extract/2, expand/3, mac/2, tree/3, getValue/1, getLeft/1, getRight/1
+equations: hopen(sk, info, hseal(hpk(sk), info, m)) = m,
+           getValue(tree(v, l, r)) = v,
+           getLeft(tree(v, l, r)) = l,
+           getRight(tree(v, l, r)) = r
+
+restriction Eq:
+    "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction Neq:
+    "All x #i. Neq(x, x) @ i ==> F"
+
+rule Register_sig:
+  [ Fr(~sig) ]
+  --[ Register($X, pk(~sig)) ]->
+  [ !Ltk($X, ~sig), !Cred($X, pk(~sig)), Out(pk(~sig)) ]
+
+restriction one_key_per_identity:
+  "All X pk1 pk2 #reg1 #reg2.
+     Register(X, pk1) @ reg1 & Register(X, pk2) @ reg2 ==> #reg1 = #reg2"
+
+
+rule Setup_Group:
+  let leafA = <$A, hpk(~lkA), pk(~sA)>
+      leafB = <$B, hpk(~lkB), pk(~sB)>
+      leafC = <$C, hpk(~lkC), pk(~sC)>
+      leafD = <$D, hpk(~lkD), pk(~sD)>
+      tree1 = tree(hpk(~yk),
+                   tree(hpk(~xk), leafA, leafB),
+                   tree(hpk(~zk), leafC, leafD))
+      thA   = h(<'leaf', '0', leafA>)
+      thB   = h(<'leaf', '1', leafB>)
+      thC   = h(<'leaf', '2', leafC>)
+      thD   = h(<'leaf', '3', leafD>)
+      thX   = h(<'parent', hpk(~xk), thA, thB>)
+      thZ   = h(<'parent', hpk(~zk), thC, thD>)
+      th1   = h(<'parent', hpk(~yk), thX, thZ>)
+      GC1   = <~gid, %1 %+ %1, th1, ~cth1>
+  in
+  [ !Ltk($A, ~sA), !Ltk($B, ~sB), !Ltk($C, ~sC), !Ltk($D, ~sD)
+  , Fr(~gid), Fr(~cth1), Fr(~int1), Fr(~init1), Fr(~enc1)
+  , Fr(~lkA), Fr(~lkB), Fr(~lkC), Fr(~lkD), Fr(~xk), Fr(~yk), Fr(~zk) ]
+  --[ Neq($A, $B), Neq($A, $C), Neq($A, $D)
+    , Neq($B, $C), Neq($B, $D), Neq($C, $D)
+    , Setup(~gid, $A, $B, $C, $D)
+    , SetupKeys(~gid, ~xk, ~yk, ~zk)
+    , GroupKey($A, ~gid, %1 %+ %1, ~enc1), GroupKey($B, ~gid, %1 %+ %1, ~enc1)
+    , GroupKey($C, ~gid, %1 %+ %1, ~enc1), GroupKey($D, ~gid, %1 %+ %1, ~enc1) ]->
+  [ StA1($A, ~gid, tree1, GC1, ~int1, ~init1, ~lkA)
+  , StB1($B, ~gid, tree1, GC1, ~int1, ~init1, ~lkB)
+  , StZ1($C, ~gid, tree1, GC1, ~int1, ~init1, ~lkC, ~zk)
+  , StZ1($D, ~gid, tree1, GC1, ~int1, ~init1, ~lkD, ~zk)
+  , !Secrets($A, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkA, ~xk, ~yk>)
+  , !Secrets($B, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkB, ~xk, ~yk>)
+  , !Secrets($C, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkC, ~zk, ~yk>)
+  , !Secrets($D, ~gid, %1 %+ %1, <~init1, ~enc1, ~lkD, ~zk, ~yk>)
+  , Out(<tree1, GC1, ~int1>) ]
+
+
+  
+end
